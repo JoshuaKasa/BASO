@@ -9,6 +9,48 @@ from pynput import mouse
 class ScriptSyntaxHighlighter(QSyntaxHighlighter):
     def __init__(self, parent):
         super().__init__(parent)
+        self.rules = []
+
+        # Function
+        function_font = QTextCharFormat()
+        function_font.setForeground(Qt.darkMagenta)
+        function_font.setFontWeight(QFont.Bold)
+        keywords = ['wait', 'press', 'move']
+        self.add_rule(keywords, function_font)
+
+        # Keywords
+        keyword_font = QTextCharFormat()
+        keyword_font.setForeground(Qt.darkYellow)
+        keyword_font.setFontWeight(QFont.Bold)
+        keywords = ['loop']
+        self.add_rule(keywords, keyword_font)
+
+        # Numbers 
+        number_font = QTextCharFormat()
+        number_font.setForeground(Qt.darkRed)
+        numbers = ['[0-9]+']
+        self.add_rule(numbers, number_font)
+
+        # Comments
+        comment_font = QTextCharFormat()
+        comment_font.setForeground(Qt.darkGreen)
+        comments = ['#.*']
+        self.add_rule(comments, comment_font)
+
+    def add_rule(self, patterns, format):
+        for pattern in patterns:
+            expression = QRegExp(pattern)
+            self.rules.append((expression, format))
+
+    def highlightBlock(self, text):
+        for pattern, format in self.rules:
+            index = pattern.indexIn(text)
+            while index >= 0:
+                length = pattern.matchedLength()
+                self.setFormat(index, length, format)
+                index = pattern.indexIn(text, index + length)
+
+        self.setCurrentBlockState(0)
         
 class ModMenu(QMainWindow):
     # Define signals
@@ -125,14 +167,10 @@ class ModMenu(QMainWindow):
         script_layout = QVBoxLayout()
         script_tab.setLayout(script_layout)
 
-        # On the right half of the screen a script editor will be placed (where you can insert your own code)
-        # On the left half of the screen, there will be a list of macros and your own scripts
-        # You can click a toggle button to switch between on and off for each script and macro
-        # The macros will usually be something simple like a key press or mouse click
-        # The scripts will be more complicated, like a rapid fire script
-        # There will be a button to save, load or delete scripts and macros
+        #  Script editor
         self.script_editor = QPlainTextEdit()
         script_layout.addWidget(self.script_editor)
+        self.highlighter = ScriptSyntaxHighlighter(self.script_editor.document())
 
         script_management_layout = QVBoxLayout()
         script_layout.addLayout(script_management_layout)
@@ -306,7 +344,8 @@ class ModMenu(QMainWindow):
     def mouseMoveEvent(self, event):
         if self.mouse_pressed:
             self.move(self.pos() + event.pos() - self.offset)
-
+    
+    # TODO: Implement these
     def save_script(self):
         pass
 
