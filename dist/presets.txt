@@ -1,0 +1,5 @@
+Ying - Y: 22 - X: -1 - Delay: 20 ms
+Gridlock - Y: 20 - X: -2 - Delay: 20 ms
+Warden - Y: 18 - X: -1 - Delay: 20 ms
+Goyo - Y: 15 - X: -1 - Delay: 17 ms
+Caveira - Y: 13 - X: -1 - Delay: 43 ms

@@ -1,10 +1,65 @@
 import sys
 import ctypes
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp
-from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush, QColor, QFont, QRegExpValidator
+from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush, QColor, QFont, QRegExpValidator, QTextCursor
 import pyautogui
 from pynput import mouse
+
+class ScriptEditor(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.completer = None
+
+    def setCompleter(self, completer):
+        if self.completer:
+            self.completer.activated.disconnect()
+
+        self.completer = completer
+        self.completer.setWidget(self)
+        self.completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.completer.activated.connect(self.insertCompletion)
+
+    def insertCompletion(self, completion):
+        tc = self.textCursor()
+        extra = len(completion) - len(self.completer.completionPrefix())
+        tc.movePosition(QTextCursor.Left)
+        tc.movePosition(QTextCursor.EndOfWord)
+        tc.insertText(completion[-extra:]) # insert the remaining part of the word
+        self.setTextCursor(tc)
+
+    def textUnderCursor(self):
+        tc = self.textCursor()
+        tc.select(QTextCursor.WordUnderCursor)
+        return tc.selectedText()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Tab:
+            # Insert four spaces instead of a tab
+            self.insertPlainText('    ')
+            return
+        elif self.completer and self.completer.popup().isVisible():
+            # The following keys are forwarded by the completer to the widget
+            if event.key() in (Qt.Key_Enter, Qt.Key_Return, Qt.Key_Escape, Qt.Key_Tab, Qt.Key_Backtab):
+                event.ignore()
+                return
+
+        # Handle auto-completion
+        super().keyPressEvent(event)
+        completion_prefix = self.textUnderCursor()
+        if not completion_prefix:
+            self.completer.popup().hide()
+            return
+
+        if completion_prefix != self.completer.completionPrefix():
+            self.completer.setCompletionPrefix(completion_prefix)
+            self.completer.popup().setCurrentIndex(self.completer.completionModel().index(0, 0))
+
+        cr = self.cursorRect()
+        cr.setWidth(self.completer.popup().sizeHintForColumn(0)
+                    + self.completer.popup().verticalScrollBar().sizeHint().width())
+        self.completer.complete(cr)  # popup it up!
 
 class ScriptSyntaxHighlighter(QSyntaxHighlighter):
     def __init__(self, parent):
@@ -31,10 +86,16 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         numbers = ['[0-9]+']
         self.add_rule(numbers, number_font)
 
+        # Strings
+        string_font = QTextCharFormat()
+        string_font.setForeground(QColor('salmon'))
+        strings = ['".*"', "'.*'"]
+        self.add_rule(strings, string_font)
+
         # Comments
         comment_font = QTextCharFormat()
         comment_font.setForeground(Qt.darkGreen)
-        comments = ['#.*']
+        comments = ['--@.*']
         self.add_rule(comments, comment_font)
 
     def add_rule(self, patterns, format):
@@ -168,9 +229,12 @@ class ModMenu(QMainWindow):
         script_tab.setLayout(script_layout)
 
         #  Script editor
-        self.script_editor = QPlainTextEdit()
-        script_layout.addWidget(self.script_editor)
+        self.script_editor = ScriptEditor()
         self.highlighter = ScriptSyntaxHighlighter(self.script_editor.document())
+        script_layout.addWidget(self.script_editor)
+
+        completer = QCompleter(["wait", "press", "move", "loop"])
+        self.script_editor.setCompleter(completer)    
 
         script_management_layout = QVBoxLayout()
         script_layout.addLayout(script_management_layout)
@@ -276,7 +340,6 @@ class ModMenu(QMainWindow):
                 self.update_x_slider_value(x_value)  # Update the X slider label
                 self.update_delay_value(delay)
 
-
     def delete_preset(self):
         selected_item = self.preset_list.currentItem()
         if selected_item:
@@ -328,7 +391,7 @@ class ModMenu(QMainWindow):
         if self.recoil_checkbox.isChecked() and self.is_mouse_pressed and not self.isActiveWindow():
             y_value = self.recoil_slider.value()
             x_value = self.recoil_x_slider.value()
-            if y_value > 0 and x_value != 0:
+            if y_value > 0 or x_value != 0:
                 MOUSEEVENTF_MOVE = 0x0001
                 ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, x_value, y_value, 0, 0)
     
@@ -360,3 +423,4 @@ if __name__ == '__main__':
     win = ModMenu(app)
     win.show()
     sys.exit(app.exec_())
+
