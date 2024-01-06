@@ -1,1 +1,0 @@
-Warden - Y: 18 - X: -8 - Delay: 46 ms
