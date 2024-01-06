@@ -11,7 +11,7 @@ class Token:
     def __repr__(self):
         return f'{self.type}:{self.value}'
 
-class Lexer:
+class CorelLexer:
     def __init__(self, source_code):
         self.source_code = source_code # Source code is a string
         self.tokens = [] # List of tokens, empty at first
@@ -32,6 +32,7 @@ class Lexer:
 
             # Numerical values
             ('NUMBER', r'\b\d+\b'),
+            ('TIME', r'\b\d+(s|ms|cs|ds)\b'), # 1s, 1ms, 1cs, 1ds
 
             # Parentheses and Brackets (space optional)
             ('LPAREN', r'\(\s*'),
@@ -67,11 +68,3 @@ class Lexer:
                 self.tokens.append(token)
 
         return self.tokens
-
-corel_file = open('corel.corel', 'r')
-source_code = corel_file.read()
-corel_file.close()
-
-lexer = Lexer(source_code)
-tokens = lexer.tokenize()
-print(tokens)

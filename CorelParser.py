@@ -1,6 +1,6 @@
 # COREL stands for: Command, Oriented, Recoil, Elimination, Language
 import re
-from CorelLexer import Token, Lexer
+from CorelLexer import CorelLexer
 
 # Building the AST
 class ASTnode:
@@ -12,12 +12,13 @@ class ASTnode:
         return f"ASTnode({repr(self.type)}, {repr(self.children)})"
 
 class WAITnode(ASTnode):
-    def __init__(self, type, value):
+    def __init__(self, type, value, magnitude):
         super().__init__(type)
         self.value = value
+        self.magnitude = magnitude
 
     def __repr__(self):
-        return f"WAITnode({repr(self.type)}, {repr(self.value)})"
+        return f"WAITnode({repr(self.type)}, {repr(self.value)}, {repr(self.magnitude)})"
 
 class PRESSnode(ASTnode):
     def __init__(self, type, value):
@@ -39,6 +40,7 @@ class LOOPnode(ASTnode):
     def __init__(self, type, value):
         super().__init__(type)
         self.value = value
+        self.children = []
 
     def __repr__(self):
         return f"LOOPnode({repr(self.type)}, {repr(self.value)})"
@@ -101,32 +103,44 @@ class CorelParser:
         return self.nodes
 
     def parse_wait(self):
-        token = self.tokens[self.current_position]
-        token_value = self.tokens[self.current_position].value
-        self.current_position += 1 # Skip the WAIT token
-        if self.tokens[self.current_position].type != 'LPAREN':
-            raise Exception(f'There must be a open parentheses "(" before a function arguments, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the LPAREN token
-        if self.tokens[self.current_position].type != 'NUMBER':
-            raise Exception(f'The function arguments must be a number, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the NUMBER token
-        if self.tokens[self.current_position].type != 'RPAREN':
-            raise Exception(f'There must be a close parentheses ")" after a function arguments, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the RPAREN token
+        self.current_position += 1  # Skip the WAIT token
 
-        # Creating the AST node
-        node = WAITnode('WAIT', token_value)
+        token = self.tokens[self.current_position]
+        if token.type != 'LPAREN':
+            raise Exception(f'Expected "(" after "wait", at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the LPAREN token
+
+        token = self.tokens[self.current_position]
+        if token.type != 'TIME':
+            raise Exception(f'Expected time value (e.g., 10s, 10ms) after "(", at line {token.line_number}, character {token.character_position}')
+        
+        # Use regex to extract number and magnitude from the TIME token
+        time_value = token.value
+        pattern = re.compile(r'(\d+)(s|ms|cs|ds)')
+        match = pattern.match(time_value)
+        if not match:
+            raise Exception(f'Invalid time format at line {token.line_number}, character {token.character_position}')
+
+        number, magnitude = match.groups()
+        self.current_position += 1  # Skip the TIME token
+
+        if self.tokens[self.current_position].type != 'RPAREN':
+            raise Exception(f'Expected ")" after time value, at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the RPAREN token
+
+        # Creating the WAITnode with number and magnitude
+        node = WAITnode('WAIT', int(number), magnitude)
         self.nodes.append(node)
 
     def parse_press(self):
-        token = self.tokens[self.current_position]
-        token_value = self.tokens[self.current_position].value
         self.current_position += 1 # Skip the PRESS token
+        token = self.tokens[self.current_position]
         if self.tokens[self.current_position].type != 'LPAREN':
             raise Exception(f'There must be a open parentheses "(" before a function arguments, at line {token.line_number}, character {token.character_position}')
         self.current_position += 1 # Skip the LPAREN token
         if self.tokens[self.current_position].type != 'STRING':
             raise Exception(f'The function arguments must be a string, at line {token.line_number}, character {token.character_position}')
+        token_value = self.tokens[self.current_position].value # Save the value of the STRING token
         self.current_position += 1 # Skip the STRING token
         if self.tokens[self.current_position].type != 'RPAREN':
             raise Exception(f'There must be a close parentheses ")" after a function arguments, at line {token.line_number}, character {token.character_position}')
@@ -137,14 +151,14 @@ class CorelParser:
         self.nodes.append(node)
 
     def parse_click(self):
-        token = self.tokens[self.current_position]
-        token_value = self.tokens[self.current_position].value
         self.current_position += 1 # Skip the CLICK token
+        token = self.tokens[self.current_position]
         if self.tokens[self.current_position].type != 'LPAREN':
             raise Exception(f'There must be a open parentheses "(" before a function arguments, at line {token.line_number}, character {token.character_position}')
         self.current_position += 1 # Skip the LPAREN token
         if self.tokens[self.current_position].type != 'STRING':
             raise Exception(f'The function arguments must be a string, at line {token.line_number}, character {token.character_position}')
+        token_value = self.tokens[self.current_position].value # Save the value of the STRING token
         self.current_position += 1 # Skip the STRING token
         if self.tokens[self.current_position].type != 'RPAREN':
             raise Exception(f'There must be a close parentheses ")" after a function arguments, at line {token.line_number}, character {token.character_position}')
@@ -156,28 +170,40 @@ class CorelParser:
 
     def parse_loop(self):
         token = self.tokens[self.current_position]
-        token_value = self.tokens[self.current_position].value
-        self.current_position += 1 # Skip the LOOP token
-        if self.tokens[self.current_position].type != 'LPAREN':
-            raise Exception(f'There must be a open parentheses "(" before a function arguments, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the LPAREN token
-        if self.tokens[self.current_position].type != 'NUMBER':
-            raise Exception(f'The function arguments must be a number, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the NUMBER token
-        if self.tokens[self.current_position].type != 'RPAREN':
-            raise Exception(f'There must be a close parentheses ")" after a function arguments, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the RPAREN token
+        self.current_position += 1  # Skip the LOOP token
 
-        # Parsing the loop body
+        if self.tokens[self.current_position].type != 'LPAREN':
+            raise Exception(f'Expected "(" after "loop", at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the LPAREN token
+
+        if self.tokens[self.current_position].type != 'NUMBER':
+            raise Exception(f'Loop count must be a number, at line {token.line_number}, character {token.character_position}')
+        
+        # Convert the loop count to an integer
+        loop_count = self.tokens[self.current_position].value
+        try:
+            loop_count = int(loop_count)
+        except ValueError:
+            raise Exception(f'Loop count must be a number, at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the NUMBER token
+
+        if self.tokens[self.current_position].type != 'RPAREN':
+            raise Exception(f'Expected ")" after loop count, at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the RPAREN token
+
         if self.tokens[self.current_position].type != 'LBRACE':
-            raise Exception(f'There must be a open brace "{{" before a loop body, at line {token.line_number}, character {token.character_position}')
-        self.current_position += 1 # Skip the LBRACE token
+            raise Exception(f'Expected "{{" to start loop body, at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1  # Skip the LBRACE token
+
+        loop_body_nodes = []
         while self.tokens[self.current_position].type != 'RBRACE':
             self.parse_line()
-        self.current_position += 1 # Skip the RBRACE token
+            loop_body_nodes.append(self.nodes.pop())
 
-        # Creating the AST node
-        node = LOOPnode('LOOP', token_value)
+        self.current_position += 1  # Skip the RBRACE token
+
+        node = LOOPnode('LOOP', loop_count)
+        node.children = loop_body_nodes
         self.nodes.append(node)
 
     def parse_string(self):
@@ -206,13 +232,3 @@ class CorelParser:
         # Creating the AST node
         node = COMMENTnode('COMMENT', token_value)
         self.nodes.append(node)
-
-corel_file = open('corel.corel', 'r')
-corel_code = corel_file.read()
-corel_file.close()
-
-lexer = Lexer(corel_code)
-tokens = lexer.tokenize()
-
-parser = CorelParser(tokens)
-nodes = parser.parse()

@@ -1,8 +1,8 @@
 // This is a test file for the CORES programming language
-wait(3)
-press('lmb')
+wait(3s)
+click('left')
 loop (3) {
-	press('rmb')
-	wait(30)
+	press('f')
+	wait(30ds)
 }
 
