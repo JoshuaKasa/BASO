@@ -1,5 +1,12 @@
 Ying - Y: 22 - X: -1 - Delay: 20 ms
 Gridlock - Y: 20 - X: -2 - Delay: 20 ms
 Warden - Y: 18 - X: -1 - Delay: 20 ms
-Goyo - Y: 15 - X: -1 - Delay: 17 ms
 Caveira - Y: 13 - X: -1 - Delay: 43 ms
+Brava - Y: 17 - X: -1 - Delay: 29 ms
+Kaid - Y: 48 - X: -1 - Delay: 26 ms
+Ram - Y: 15 - X: -1 - Delay: 17 ms
+Maestro - Y: 21 - X: -2 - Delay: 55 ms
+Nokk - Y: 15 - X: 1 - Delay: 17 ms
+Sledge - Y: 15 - X: 3 - Delay: 23 ms
+Dokka - Y: 35 - X: -11 - Delay: 49 ms
+Pulse - Y: 12 - X: -1 - Delay: 20 ms
