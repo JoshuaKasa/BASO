@@ -70,7 +70,7 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         function_font = QTextCharFormat()
         function_font.setForeground(Qt.darkMagenta)
         function_font.setFontWeight(QFont.Bold)
-        keywords = ['wait', 'press', 'move']
+        keywords = ['wait', 'press', 'move', 'click']
         self.add_rule(keywords, function_font)
 
         # Keywords
@@ -80,10 +80,10 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         keywords = ['loop']
         self.add_rule(keywords, keyword_font)
 
-        # Numbers 
+        # Numbers and times (e.g. 1s, 2ms)
         number_font = QTextCharFormat()
         number_font.setForeground(Qt.darkRed)
-        numbers = ['[0-9]+']
+        numbers = [r'\b\d+(?:ms|s|ds|cs)?\b']
         self.add_rule(numbers, number_font)
 
         # Strings
@@ -95,7 +95,7 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         # Comments
         comment_font = QTextCharFormat()
         comment_font.setForeground(Qt.darkGreen)
-        comments = ['--@.*']
+        comments = ['//.*']
         self.add_rule(comments, comment_font)
 
     def add_rule(self, patterns, format):
@@ -233,7 +233,7 @@ class ModMenu(QMainWindow):
         self.highlighter = ScriptSyntaxHighlighter(self.script_editor.document())
         script_layout.addWidget(self.script_editor)
 
-        completer = QCompleter(["wait", "press", "move", "loop"])
+        completer = QCompleter(["wait", "press", "move", "loop", 'click'])
         self.script_editor.setCompleter(completer)    
 
         script_management_layout = QVBoxLayout()
