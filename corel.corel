@@ -2,7 +2,7 @@
 wait(3s)
 click('left')
 loop (3) {
-	press('f')
 	wait(30ds)
+	press('f')
 }
 

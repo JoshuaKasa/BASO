@@ -22,7 +22,10 @@ class CorelInterpreter:
 
     def run(self):
         for node in self.ast:
-            self.execute_node(node)
+            try:
+                self.execute_node(node)
+            except Exception as e:
+                print(f'Unexpected error: {e}')
 
     def execute_node(self, node):
         if isinstance(node, CorelParser.WAITnode):
@@ -59,10 +62,11 @@ class CorelInterpreter:
             raise Exception(f'Invalid key: {node.value}\nValid keys: {pyautogui.KEYBOARD_KEYS}')
 
     def execute_CLICK(self, node):
-        print(f'Clicking {node.value}...')
-        res = pyautogui.click(button=node.value)
-        if res == None:
-            raise Exception(f'Invalid button: {node.value}\nValid buttons: {pyautogui.mouseInfo()}')
+        valid_buttons = ['left', 'middle', 'right']
+        if node.value not in valid_buttons:
+            raise Exception(f'Invalid button: {node.value}\nValid buttons: {valid_buttons}')
+        
+        pyautogui.click(button=node.value)
 
     def execute_LOOP(self, node):
         print(f'Looping {node.value} times...')

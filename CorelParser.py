@@ -23,7 +23,7 @@ class WAITnode(ASTnode):
 class PRESSnode(ASTnode):
     def __init__(self, type, value):
         super().__init__(type)
-        self.value = value
+        self.value = value.replace('"', '').replace("'", '').lower() # Remove the quotes from the string
 
     def __repr__(self):
         return f"PRESSnode({repr(self.type)}, {repr(self.value)})"
@@ -31,7 +31,7 @@ class PRESSnode(ASTnode):
 class CLICKnode(ASTnode):
     def __init__(self, type, value):
         super().__init__(type)
-        self.value = value
+        self.value = value.replace('"', '').replace("'", '').lower() # Remove the quotes from the string
 
     def __repr__(self):
         return f"CLICKnode({repr(self.type)}, {repr(self.value)})"

@@ -10,3 +10,10 @@ Nokk - Y: 15 - X: 1 - Delay: 17 ms
 Sledge - Y: 15 - X: 3 - Delay: 23 ms
 Dokka - Y: 35 - X: -11 - Delay: 49 ms
 Pulse - Y: 12 - X: -1 - Delay: 20 ms
+Jager - Y: 17 - X: -1 - Delay: 29 ms
+Frost - Y: 20 - X: 1 - Delay: 26 ms
+Lion - Y: 21 - X: -1 - Delay: 20 ms
+Ace - Y: 23 - X: -2 - Delay: 20 ms
+Thermite - Y: 16 - X: 3 - Delay: 29 ms
+Fenrir - Y: 17 - X: 1 - Delay: 23 ms
+Solis - Y: 14 - X: 1 - Delay: 20 ms
