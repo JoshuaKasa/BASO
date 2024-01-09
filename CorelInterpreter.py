@@ -56,9 +56,10 @@ class CorelInterpreter:
         time.sleep(sleep_time)
 
     def execute_PRESS(self, node):
-        print(f'Pressing {node.value}...')
-        res = pyautogui.press(node.value) # Returns the key that was pressed (None if failed)
-        if res == None:
+        if node.value in pyautogui.KEYBOARD_KEYS:
+            print(f'Pressing {node.value}...')
+            pyautogui.press(node.value)
+        else:
             raise Exception(f'Invalid key: {node.value}\nValid keys: {pyautogui.KEYBOARD_KEYS}')
 
     def execute_CLICK(self, node):

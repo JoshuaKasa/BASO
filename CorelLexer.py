@@ -21,14 +21,14 @@ class CorelLexer:
 
     def tokenize(self):
         token_regex = [
-            # Commands (using case-insensitive matching)
+            # Commands
             ('WAIT', r'\bwait\b'),
             ('PRESS', r'\bpress\b'),
             ('CLICK', r'\bclick\b'),
             ('LOOP', r'\bloop\b'),
 
-            # String Literals (for arguments like 'lmb')
-            ('STRING', r"'[^']*'"),
+            # String Literals (for arguments like 'lmb', works with 
+            ('STRING', r"('([^']*)')|(\"([^\"]*)\")"),
 
             # Numerical values
             ('NUMBER', r'\b\d+\b'),

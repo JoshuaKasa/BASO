@@ -16,17 +16,23 @@ class ScriptEditor(QPlainTextEdit):
             self.completer.activated.disconnect()
 
         self.completer = completer
-        self.completer.setWidget(self)
-        self.completer.setCompletionMode(QCompleter.PopupCompletion)
-        self.completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self.completer.setWidget(self) # set the widget to the completer
+        self.completer.setCompletionMode(QCompleter.PopupCompletion) # set how the completer works
+        self.completer.setCaseSensitivity(Qt.CaseInsensitive) # case insensitive completion
         self.completer.activated.connect(self.insertCompletion)
 
     def insertCompletion(self, completion):
-        tc = self.textCursor()
-        extra = len(completion) - len(self.completer.completionPrefix())
+        tc = self.textCursor()  # get the current cursor
+        extra = len(completion) - len(self.completer.completionPrefix())  # extra characters to insert
         tc.movePosition(QTextCursor.Left)
-        tc.movePosition(QTextCursor.EndOfWord)
-        tc.insertText(completion[-extra:]) # insert the remaining part of the word
+        tc.movePosition(QTextCursor.EndOfWord)  # move to the end of the word
+
+        # Check if the completed word is the same as the suggestion
+        if completion[-extra:] == self.textUnderCursor():
+            self.completer.popup().hide()
+            return
+
+        tc.insertText(completion[-extra:])  # insert the remaining part of the word
         self.setTextCursor(tc)
 
     def textUnderCursor(self):
@@ -48,6 +54,8 @@ class ScriptEditor(QPlainTextEdit):
         # Handle auto-completion
         super().keyPressEvent(event)
         completion_prefix = self.textUnderCursor()
+
+        # If the completer is not visible, we do nothing here
         if not completion_prefix:
             self.completer.popup().hide()
             return
