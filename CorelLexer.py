@@ -21,9 +21,13 @@ class CorelLexer:
 
     def tokenize(self):
         token_regex = [
+            # Key macro start declaration
+            ('STARTKEY', r'--<[a-zA-Z]+>'), # --<key>
+
             # Commands
             ('WAIT', r'\bwait\b'),
             ('PRESS', r'\bpress\b'),
+            ('MOVE', r'\bmove\b'),
             ('CLICK', r'\bclick\b'),
             ('LOOP', r'\bloop\b'),
 
@@ -33,6 +37,7 @@ class CorelLexer:
             # Numerical values
             ('NUMBER', r'\b\d+\b'),
             ('TIME', r'\b\d+(s|ms|cs|ds)\b'), # 1s, 1ms, 1cs, 1ds
+            ('COORDINATES', r'-?\d+(x|y)\b'), # 1x, 1y
 
             # Parentheses and Brackets (space optional)
             ('LPAREN', r'\(\s*'),
@@ -63,7 +68,7 @@ class CorelLexer:
                 line_start = 0
             character_position = start_pos - line_start
 
-            if kind != 'WHITESPACE':
+            if kind != 'WHITESPACE' and kind != 'COMMENT': # Ignore whitespace and comments
                 token = Token(kind, value, line_number, character_position)
                 self.tokens.append(token)
 
