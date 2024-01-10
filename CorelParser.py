@@ -36,6 +36,15 @@ class CLICKnode(ASTnode):
     def __repr__(self):
         return f"CLICKnode({repr(self.type)}, {repr(self.value)})"
 
+class MOVEnode(ASTnode):
+    def __init__(self, type, direction, value):
+        super().__init__(type)
+        self.direction = direction
+        self.value = value
+
+    def __repr__(self):
+        return f"MOVEnode({repr(self.type)}, {repr(self.direction)}, {repr(self.value)})"
+
 class LOOPnode(ASTnode):
     def __init__(self, type, value):
         super().__init__(type)
@@ -91,8 +100,8 @@ class CorelParser:
             self.parse_string()
         elif token.type == 'NUMBER':
             self.parse_number()
-        elif token.type == 'COMMENT':
-            self.parse_comment()
+        elif token.type == 'MOVE':
+            self.parse_move()
         else:
             raise Exception(f'Invalid syntax at line {token.line_number}, character {token.character_position}')
 
@@ -224,11 +233,43 @@ class CorelParser:
         node = NUMBERnode('NUMBER', token_value)
         self.nodes.append(node)
 
-    def parse_comment(self):
+    def parse_move(self):
+        self.current_position += 1 # Skip the MOVE token
         token = self.tokens[self.current_position]
-        token_value = self.tokens[self.current_position].value
-        self.current_position += 1 # Skip the COMMENT token
+        
+        # Check if the next token is a LPAREN
+        if self.tokens[self.current_position].type != 'LPAREN':
+            raise Exception(f'There must be a open parentheses "(" before a function arguments, at line {token.line_number}, character {token.character_position}')
+
+        self.current_position += 1 # Skip the LPAREN token
+
+        # Check if the next token is a NUMBER
+        if self.tokens[self.current_position].type == 'NUMBER':
+            raise Exception(f'You must the direction (x or y) after the number, at line {token.line_number}, character {token.character_position}')
+        elif self.tokens[self.current_position].type != 'COORDINATES':
+            raise Exception(f'The function arguments must be a coordinate, at line {token.line_number}, character {token.character_position}')
+        
+        # Save the value of the COORDINATES token
+        token_value = self.tokens[self.current_position].value 
+        self.current_position += 1 # Skip the COORDINATES token
+
+        # Check if the next token is a closed parentheses
+        if self.tokens[self.current_position].type != 'RPAREN':
+            raise Exception(f'There must be a close parentheses ")" after a function arguments, at line {token.line_number}, character {token.character_position}')
+        self.current_position += 1
+
+        # Getting the values
+        pattern = re.compile(r'(-?\d+)(x|y)\b')
+        match = pattern.match(token_value) # Use regex to extract the direction and the value from the COORDINATES token
+        if not match:
+            raise Exception(f'Invalid coordinate format at line {token.line_number}, character {token.character_position}')
+
+        try:
+            value, direction = match.groups()
+            value = int(value)
+        except ValueError:
+            raise Exception(f'Invalid coordinate format at line {token.line_number}, character {token.character_position}')
 
         # Creating the AST node
-        node = COMMENTnode('COMMENT', token_value)
+        node = MOVEnode('MOVE', direction, value)
         self.nodes.append(node)

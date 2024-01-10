@@ -15,6 +15,11 @@ from CorelLexer import CorelLexer
 def print(*objects, sep=' ', end='\n', file=sys.stdout, flush=True):
     __builtins__.print(*objects, sep=sep, end=end, file=file, flush=flush)
 
+# Function for moving the mouse at the OS level as pyautogui doesn't work
+MOUSEEVENTF_MOVE = 0x0001 # This constant is taken from the Windows API
+def move_cursor(x, y):
+    ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, x, y, 0, 0)
+
 # Interpreter
 class CorelInterpreter:
     def __init__(self, ast):
@@ -36,6 +41,8 @@ class CorelInterpreter:
             self.execute_CLICK(node)
         elif isinstance(node, CorelParser.LOOPnode):
             self.execute_LOOP(node)
+        elif isinstance(node, CorelParser.MOVEnode):
+            self.execute_MOVE(node)
 
     def execute_WAIT(self, node):
         print(f'Waiting {node.value} {node.magnitude}...')
@@ -61,6 +68,15 @@ class CorelInterpreter:
             pyautogui.press(node.value)
         else:
             raise Exception(f'Invalid key: {node.value}\nValid keys: {pyautogui.KEYBOARD_KEYS}')
+    
+    def execute_MOVE(self, node):
+        print(f'Moving {node.value} {node.direction}...')
+        if node.direction == 'x':
+            move_cursor(node.value, 0)
+        elif node.direction == 'y':
+            move_cursor(0, node.value)
+        else:
+            raise Exception(f'Invalid direction: {node.direction}\nValid directions: x, y')
 
     def execute_CLICK(self, node):
         valid_buttons = ['left', 'middle', 'right']

@@ -1,6 +1,6 @@
 import sys
 import ctypes
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter, QFileDialog
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp
 from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush, QColor, QFont, QRegExpValidator, QTextCursor
 import pyautogui
@@ -74,11 +74,18 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         super().__init__(parent)
         self.rules = []
 
+        # Macro key start definition
+        macro_font = QTextCharFormat()
+        macro_font.setForeground(QColor(60, 64, 94))
+        macro_font.setFontWeight(QFont.Bold)
+        macros = [r'--<[a-zA-Z]+>'] # e.g. --<macro>
+        self.add_rule(macros, macro_font)
+
         # Function
         function_font = QTextCharFormat()
         function_font.setForeground(Qt.darkMagenta)
         function_font.setFontWeight(QFont.Bold)
-        keywords = ['wait', 'press', 'move', 'click']
+        keywords = ['wait', 'press', 'move', 'click', 'move']
         self.add_rule(keywords, function_font)
 
         # Keywords
@@ -91,12 +98,12 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         # Numbers and times (e.g. 1s, 2ms)
         number_font = QTextCharFormat()
         number_font.setForeground(Qt.darkRed)
-        numbers = [r'\b\d+(?:ms|s|ds|cs)?\b']
+        numbers = [r'\b\d+(?:ms|s|ds|cs|x|y)?\b']
         self.add_rule(numbers, number_font)
 
         # Strings
         string_font = QTextCharFormat()
-        string_font.setForeground(QColor('salmon'))
+        string_font.setForeground(QColor('green'))
         strings = ['".*"', "'.*'"]
         self.add_rule(strings, string_font)
 
@@ -416,15 +423,25 @@ class ModMenu(QMainWindow):
         if self.mouse_pressed:
             self.move(self.pos() + event.pos() - self.offset)
     
-    # TODO: Implement these
     def save_script(self):
-        pass
+        if not hasattr(self, 'current_script_path') or self.current_script_path is None:
+            self.current_script_path, _ = QFileDialog.getSaveFileName(self, "Save Script", "", "Corel Files (*.corel)")
+
+        if self.current_script_path:
+            with open(self.current_script_path, 'w') as file:
+                file.write(self.script_editor.toPlainText())
 
     def load_script(self):
-        pass
+        path, _ = QFileDialog.getOpenFileName(self, "Open Script", "", "Corel Files (*.corel)")
+        if path:
+            with open(path, 'r') as file:
+                self.script_editor.setPlainText(file.read())
+            self.current_script_path = path
 
     def delete_script(self):
+        # TODO: Implement this. I'm thinking about deleting this, as you could just use the OS to delete the file.
         pass
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
