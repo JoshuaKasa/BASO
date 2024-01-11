@@ -1,6 +1,8 @@
 import sys
 import ctypes
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter, QFileDialog
+import os
+import json
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter, QFileDialog, QComboBox, QColorDialog
 from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp
 from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush, QColor, QFont, QRegExpValidator, QTextCursor
 import pyautogui
@@ -138,6 +140,8 @@ class ModMenu(QMainWindow):
         self.app = app
         self.initUI()
         self.load_presets()
+        self.load_theme_preferences()
+
         self.recoil_timer = QTimer()
         self.recoil_timer.timeout.connect(self.apply_recoil)
         self.mouse_pressed = False
@@ -266,32 +270,22 @@ class ModMenu(QMainWindow):
         delete_script_button.clicked.connect(self.delete_script)
         script_management_layout.addWidget(delete_script_button)
 
+        # Theme tab
+        themes_tab = QWidget()
+        tab_widget.addTab(themes_tab, 'Themes')
+        self.createThemesTab(themes_tab)
+
         # Set the stylesheet
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #e6e6e6; /* Gray background */
-            }
-            QPushButton {
-                background-color: #007BFF; /* Blue button background */
-                color: white;
-                border: none;
-                border-radius: 15px; /* Adjust this value for rounder or sharper edges */
-                padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background-color: #0056b3; /* Darker blue on hover */
-            }
             QSlider {
                 background-color: transparent;
                 height: 10px;
             }
             QSlider::groove:horizontal {
-                background: #ccc;
                 height: 10px;
                 border-radius: 5px;
             }
             QSlider::handle:horizontal {
-                background: #007BFF; /* Blue slider handle */
                 width: 15px;
                 margin: -2px 0;
                 border-radius: 7px;
@@ -301,14 +295,233 @@ class ModMenu(QMainWindow):
                 height: 20px;
             }
             QListWidget {
-                background-color: white;
                 border: 1px solid #ccc;
-                border-radius: 10px; /* Adjust this value for rounder or sharper edges */
+                border-radius: 10px;
             }
         """)
 
         
         self.show()
+
+    def createThemesTab(self, parent_widget):
+        layout = QVBoxLayout(parent_widget)
+
+        # Dropdown for preset themes
+        self.theme_selector = QComboBox()
+        self.theme_selector.addItems(['default', 'gruvbox dark', 'serika dark', 'catpuccin mocha', 'milkshake', 'cafe', 'blueberry light', 'cheesecake', 'starclass', 'honey', 'hot chocolate', 'TMO', 'nene'])
+        layout.addWidget(self.theme_selector)
+        self.theme_selector.currentIndexChanged.connect(self.applyPresetTheme)
+
+        # Theme preview section
+        self.createThemePreviewSection(layout)
+
+    def createThemePreviewSection(self, layout):
+        # Add a label for preview
+        preview_label = QLabel("Theme Preview")
+        preview_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(preview_label)
+
+        # Add a test button
+        test_button = QPushButton("Test Button")
+        layout.addWidget(test_button)
+
+        # Add some sample text
+        sample_text = QLabel("This is a sample text for theme preview.")
+        sample_text.setAlignment(Qt.AlignCenter)
+        layout.addWidget(sample_text)
+
+        # Add a slider for preview
+        preview_slider = QSlider(Qt.Horizontal)
+        layout.addWidget(preview_slider)
+
+        # Add a checkbox for preview
+        preview_checkbox = QCheckBox("Sample Checkbox")
+        layout.addWidget(preview_checkbox)
+
+    def applyPresetTheme(self):
+        theme_name = self.theme_selector.currentText()
+        self.save_theme_preferences(theme_name)
+        # List of presets:
+        preset_themes = {
+            "gruvbox dark": {
+                "background": "#282828", "primary": "#fabd2f", "secondary": "#83a598", "accent": "#b16286", "text": "#ffffff"
+            },
+            "serika dark": {
+                "background": "#3a3a3a", "primary": "#e2b714", "secondary": "#4d4d4d", "accent": "#8c7851", "text": "#ffffff"
+            },
+            "serika": {
+                "background": "#e2d3ba", "primary": "#323437", "secondary": "#e2b714", "accent": "#3e424d", "text": "#282828"
+            },
+            "catpuccin mocha": {
+                "background": "#1E1E2E", "primary": "#CDD6F4", "secondary": "#F5A97F", "accent": "#89b4fa", "text": "#a6accd"
+            },
+            "milkshake": {
+                "background": "#f2e7c9", "primary": "#6e4a4a", "secondary": "#c6aa8e", "accent": "#a67358", "text": "#38220f"
+            },
+            "cafe": {
+                "background": "#2e1f1c", "primary": "#c0a36e", "secondary": "#a67358", "accent": "#805b36", "text": "#f3e9dc"
+            },
+            "blueberry light": {
+                "background": "#d8e2ef", "primary": "#3c4c5e", "secondary": "#528bff", "accent": "#6b8dd6", "text": "#1c283b"
+            },
+            "cheesecake": {
+                "background": "#f4e0d3", "primary": "#5a4a42", "secondary": "#c6aa8e", "accent": "#805b36", "text": "#38220f"
+            },
+            # I made these myself
+            "honey": {
+                "background": "#FFF8E1",  # Light honey or cream
+                "primary": "#FFC107",    # Vibrant honey or gold
+                "secondary": "#FFB300",  # Deeper honey or amber
+                "accent": "#FFD54F",     # Soft honey or light amber
+                "text": "#795548"        # Rich brown, resembling honeycomb or bees
+            },
+            "starclass": { # Inspired by Starbucks but I don't want to get sued so I'm calling it Starclass :thumbsup:
+                "background": "#D4E9E2",  # Light mint or soft green, reminiscent of a Starbucks cup
+                "primary": "#00704A",    # Starbucks green
+                "secondary": "#005241",  # Deeper green, for contrast
+                "accent": "#A5D6A7",     # Lighter green, for highlights
+                "text": "#3E2723"        # Dark brown, like coffee beans
+            },
+            "TMO": { # Inspired by BMO from Adventure Time
+                "background": "#A7DBC8",  # Soft teal, similar to BMO's body
+                "primary": "#59CE8F",     # Light green, like BMO's face
+                "secondary": "#507C7E",   # Darker teal, for contrast
+                "accent": "#A1E8AF",      # Pale green, for highlights
+                "text": "#3A4042"         # Dark grey, for text
+            },
+            "hot chocolate": { # Inspired by hot chocolate, coffee and marshmallows
+                "background": "#FFF4E6",  # Creamy off-white, like milk foam
+                "primary": "#8C5E58",     # Warm brown, like hot chocolate
+                "secondary": "#AA8073",   # Lighter brown, for contrast
+                "accent": "#D3A99A",      # Soft pink, reminiscent of marshmallows
+                "text": "#5A3B35"         # Darker brown, for text
+            },
+            "nene": { # She is my beatiful, perfect girl. She has amazing blue eyes, and loves light blue and cyan. She is my everything. https://www.instagram.com/heyits.nene/
+                "background": "#E0F7FA",  # Light cyan, airy and light
+                "primary": "#4DD0E1",     # Light blue, like her eyes
+                "secondary": "#26C6DA",   # Slightly darker blue, for depth
+                "accent": "#B2EBF2",      # Pale blue, for a softer touch
+                "text": "#00838F"         # Dark teal, for readable text
+            },
+            'default': {
+                "background": "#e6e6e6", "primary": "#007BFF", "secondary": "#0056b3", "accent": "#0056b3", "text": "#ffffff"
+            }
+        }
+        colors = preset_themes.get(theme_name, ['#ffffff', '#000000', '#888888'])
+        self.applyTheme(colors)
+
+    def save_theme_preferences(self, theme_name):
+        try:
+            with open('theme_preferences.json', 'w') as f:
+                json.dump({'theme': theme_name}, f)
+        except Exception as e:
+            print(f"Error saving theme preferences: {e}")
+
+    def load_theme_preferences(self):
+        if os.path.exists('theme_preferences.json'):
+            try:
+                with open('theme_preferences.json', 'r') as f:
+                    theme_preferences = json.load(f)
+                    theme_name = theme_preferences.get('theme', 'default')
+                    index = self.theme_selector.findText(theme_name)
+                    if index >= 0:
+                        self.theme_selector.setCurrentIndex(index)
+                        self.applyPresetTheme()
+            except Exception as e:
+                print(f"Error loading theme preferences: {e}")
+        else:
+            print("Theme preferences file not found.")
+
+    def chooseColor(self):
+        color = QColorDialog.getColor()
+        if color.isValid():
+            sender = self.sender()
+            sender.setStyleSheet(f'background-color: {color.name()}')
+
+    def applyCustomTheme(self):
+        colors = [btn.palette().button().color().name() for btn in self.custom_color_buttons]
+        self.applyTheme(colors)
+
+    def applyTheme(self, colors):
+        if not all(key in colors for key in ['background', 'primary', 'secondary', 'accent', 'text']):
+            raise Exception('Invalid theme colors, must be a list of hex values for background, primary, secondary, accent, and text')
+
+        self.setStyleSheet(f"""
+            QMainWindow {{
+                background-color: {colors['background']};
+                color: {colors['text']};
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            QPushButton {{
+                background-color: {colors['primary']};
+                color: {colors['text']};
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                margin: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {colors['accent']};
+            }}
+            QSlider::groove:horizontal {{
+                border: 1px solid #999999;
+                height: 8px;
+                background: {colors['secondary']};
+                margin: 2px 0;
+                border-radius: 4px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {colors['primary']};
+                border: 1px solid #5c5c5c;
+                width: 18px;
+                margin: -2px 0;
+                border-radius: 3px;
+            }}
+            QCheckBox {{
+                spacing: 5px;
+                color: {colors['text']};  /* Ensure text color for QCheckBox */
+            }}
+            QCheckBox::indicator {{
+                width: 18px;
+                height: 18px;
+            }}
+            QTabWidget::pane {{
+                border-top: 2px solid {colors['secondary']};
+                position: absolute;
+                top: -0.5em;
+                color: {colors['text']};
+                background: {colors['background']};
+            }}
+            QTabBar::tab {{
+                background: {colors['secondary']};
+                color: {colors['text']};
+                border-bottom: 2px solid transparent;
+                padding: 10px;
+                margin: 0px;
+            }}
+            QTabBar::tab:selected {{
+                background: {colors['primary']};
+                border-bottom-color: {colors['accent']};
+            }}
+            QListWidget, QLineEdit, QPlainTextEdit, QComboBox {{
+                border: 1px solid {colors['secondary']};
+                border-radius: 4px;
+                padding: 3px;
+                background: {colors['background']};
+                color: {colors['text']};  /* Ensure text color for input fields */
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QLabel {{
+                margin: 6px;
+                color: {colors['text']};  /* Ensure text color for QLabel */
+            }}
+        """)
+
+        # Update specific widgets if necessary
+        self.preset_list.setStyleSheet(f"color: {colors['text']};")
+        self.preset_name_edit.setStyleSheet(f"color: {colors['text']};")
 
     def update_slider_value(self, value):
         self.recoil_slider_label.setText(f'Recoil Control Y: {value}')
@@ -318,7 +531,6 @@ class ModMenu(QMainWindow):
 
     def update_delay_value(self, value):
         self.delay_slider_label.setText(f'Delay (ms): {value}')
-
 
     def save_preset(self):
         name = self.preset_name_edit.text()

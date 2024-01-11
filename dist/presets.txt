@@ -17,3 +17,4 @@ Ace - Y: 23 - X: -2 - Delay: 20 ms
 Thermite - Y: 16 - X: 3 - Delay: 29 ms
 Fenrir - Y: 17 - X: 1 - Delay: 23 ms
 Solis - Y: 14 - X: 1 - Delay: 20 ms
+Twitch - Y: 25 - X: -1 - Delay: 17 ms
