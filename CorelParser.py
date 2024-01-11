@@ -28,6 +28,14 @@ class PRESSnode(ASTnode):
     def __repr__(self):
         return f"PRESSnode({repr(self.type)}, {repr(self.value)})"
 
+class KEYnode(ASTnode):
+    def __init__(self, type, value):
+        super().__init__(type)
+        self.value = value.replace('"', '').replace("'", '').lower()
+
+    def __repr__(self):
+        return f"KEYnode({repr(self.type)}, {repr(self.value)})"
+
 class CLICKnode(ASTnode):
     def __init__(self, type, value):
         super().__init__(type)
@@ -272,4 +280,20 @@ class CorelParser:
 
         # Creating the AST node
         node = MOVEnode('MOVE', direction, value)
+        self.nodes.append(node)
+
+    def parse_key(self):
+        # Getting the pattern
+        token = self.tokens[self.current_position]
+        token_value = self.tokens[self.current_position].value
+        self.current_position += 1 # Skip the KEY token
+    
+        # Remove everything that is not a character
+        pattern = re.compile(r'[a-zA-Z]')
+        match = pattern.match(token_value)
+        if not match:
+            raise Exception(f'Invalid key format at line {token.line_number}, character {token.character_position}')
+
+        # Creating the AST node
+        node = KEYnode('KEY', token_value)
         self.nodes.append(node)
