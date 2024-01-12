@@ -308,7 +308,7 @@ class ModMenu(QMainWindow):
 
         # Dropdown for preset themes
         self.theme_selector = QComboBox()
-        self.theme_selector.addItems(['default', 'gruvbox dark', 'serika dark', 'catpuccin mocha', 'milkshake', 'cafe', 'blueberry light', 'cheesecake', 'starclass', 'honey', 'hot chocolate', 'TMO', 'nene'])
+        self.theme_selector.addItems(['default', 'gruvbox dark', 'serika dark', 'catpuccin mocha', 'milkshake', 'cafe', 'blueberry light', 'cheesecake', 'starclass', 'honey', 'hot chocolate', 'TMO', 'nene', 'nocto'])
         layout.addWidget(self.theme_selector)
         self.theme_selector.currentIndexChanged.connect(self.applyPresetTheme)
 
@@ -402,6 +402,14 @@ class ModMenu(QMainWindow):
                 "secondary": "#26C6DA",   # Slightly darker blue, for depth
                 "accent": "#B2EBF2",      # Pale blue, for a softer touch
                 "text": "#00838F"         # Dark teal, for readable text
+            },
+            'nocto': {
+                
+                'background': '#f5f5f5',
+                'primary': '#424242',
+                'secondary': '#bdbdbd',
+                'accent': '#eoeoeo',
+                'text': '#212121'
             },
             'default': {
                 "background": "#e6e6e6", "primary": "#007BFF", "secondary": "#0056b3", "accent": "#0056b3", "text": "#ffffff"
