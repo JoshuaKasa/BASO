@@ -1,4 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.mk linguist-detectable=false
-Makefile linguist-detectable=false
+Makefile.txt linguist-detectable=false
