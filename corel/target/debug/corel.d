@@ -1,1 +1,1 @@
-C:\Users\jizos\Documents\Programming\Python\Po\corel\target\debug\corel.exe: C:\Users\jizos\Documents\Programming\Python\Po\corel\src\corel_lexer.rs C:\Users\jizos\Documents\Programming\Python\Po\corel\src\main.rs
+C:\Users\jizos\Documents\Programming\Python\Po\corel\target\debug\corel.exe: C:\Users\jizos\Documents\Programming\Python\Po\corel\src\corel_lexer.rs C:\Users\jizos\Documents\Programming\Python\Po\corel\src\corel_parser.rs C:\Users\jizos\Documents\Programming\Python\Po\corel\src\main.rs

@@ -1,8 +1,7 @@
 use std::fs;
-use std::io::Result;
-use std::collections::HashMap;
 
 mod corel_lexer;
+mod corel_parser;
 
 fn main() {
     let source_code_path = "corel.corel";
@@ -19,4 +18,14 @@ fn main() {
     // Tokenizing the source code
     let tokens = lexer.tokenize();
     println!("Tokens: {:?}", tokens);
+
+    // Creating the parser
+    let mut parser = corel_parser::CorelParser {
+        tokens: tokens,
+        ..Default::default()
+    };
+
+    // Parsing the tokens
+    let ast = parser.parse();
+    println!("AST: {:?}", ast);
 }

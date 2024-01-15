@@ -3,12 +3,12 @@ use regex::Regex;
 
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Token {
-    r#type: String,
-    value: String,
-    line_number: i32,
-    column_number: i32
+    pub r#type: String,
+    pub value: String,
+    pub line_number: i32,
+    pub column_number: i32
 }
 
 #[derive(Debug)]
