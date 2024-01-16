@@ -1,22 +1,25 @@
+// TODO: Fix the LOOP node.
+// Current problem is: The parser is detecting the LOOP node correctly but then not correctly
+// parsing it's body, I have no idea how to parse each line of the body of the loop.
+
 extern crate regex;
 use regex::Regex;
 
 use crate::corel_lexer;
 
 // AST nodes
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NodeType {
-    AST,
-    WAIT,
-    PRESS,
-    CLICK,
-    LOOP,
-    KEY,
-    MOVE
+    WAIT(Box<WAITnode>),
+    PRESS(Box<PRESSnode>),
+    KEY(Box<KEYnode>),
+    CLICK(Box<CLICKnode>),
+    LOOP(Box<LOOPnode>),
+    MOVE(Box<MOVEnode>)
 }
 
 // AST nodes struct
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ASTnode {
     node_type: NodeType,
     children: Vec<ASTnode>
@@ -24,90 +27,83 @@ pub struct ASTnode {
 impl ASTnode {
     pub fn new(node_type: NodeType) -> Self {
         Self {
-            node_type: node_type,
+            node_type,
             children: Vec::new()
         }
     }
+
+    pub fn add_child(&mut self, child: ASTnode) {
+        self.children.push(child);
+    }
 }
 
+#[derive(Debug, Clone)]
 pub struct WAITnode {
-    node_type: NodeType,
     value: i32,
     magnitude: String
 }
 impl WAITnode {
     pub fn new(value: i32, magnitude: String) -> Self {
         Self {
-            node_type: NodeType::WAIT,
             value: value,
             magnitude: magnitude
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct PRESSnode {
-    node_type: NodeType,
     value: String
 }
 impl PRESSnode {
     pub fn new(value: String) -> Self {
         Self {
-            node_type: NodeType::PRESS,
             value: value
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct KEYnode {
-    node_type: NodeType,
     value: String
 }
 impl KEYnode {
     pub fn new(value: String) -> Self {
         Self {
-            node_type: NodeType::KEY,
             value: value
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct CLICKnode {
-    node_type: NodeType,
     value: String
 }
 impl CLICKnode {
     pub fn new(value: String) -> Self {
         Self {
-            node_type: NodeType::CLICK,
             value: value
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct LOOPnode {
-    node_type: NodeType,
     value: i32,
     children: Vec<ASTnode>
 }
 impl LOOPnode {
-    pub fn new(value: i32) -> Self {
+    pub fn new(value: i32, children: Vec<ASTnode>) -> Self {
         Self {
-            node_type: NodeType::LOOP,
             value: value,
-            children: Vec::new()
+            children: children
         }
     }
 }
-
+#[derive(Debug, Clone)]
 pub struct MOVEnode {
-    node_type: NodeType,
     value: String,
     direction: String
 }
 impl MOVEnode {
     pub fn new(value: String, direction: String) -> Self {
         Self {
-            node_type: NodeType::MOVE,
             value: value,
             direction: direction
         }
@@ -139,26 +135,28 @@ impl CorelParser {
         match token_type.as_str() {
             "WAIT" => self.parse_wait(),
             "PRESS" => self.parse_press(),
-            "KEY" => self.parse_key(),
+            "STARTKEY" => self.parse_key(),
             "CLICK" => self.parse_click(),
             "LOOP" => self.parse_loop(),
             "MOVE" => self.parse_move(),
+            "COMMENT" => return,
             _ => println!("Error: Invalid token type: {} at line: {}", token_type, token.line_number),
         }
     }
 
-    pub fn parse(&mut self) {
+    pub fn parse(&mut self) -> Vec<ASTnode> {
         while self.current_position < self.tokens.len() as i32 {
             self.parse_line();
             self.current_position += 1;
         }
+        self.nodes.clone() // Returning the AST (cloned for borrow checker)
     }
 
     fn parse_wait(&mut self) {
         self.current_position += 1; // Skip the WAIT token
         let token = self.tokens[self.current_position as usize].clone();
 
-        // Checking for correct syntax (wait(5s))
+        // Checking for correct syntax (wait(5s, 10ms, 15ds, 20cs))
         if token.r#type != "LPAREN" {
             println!("Error: Expected LPAREN at line: {}", token.line_number);
             return;
@@ -170,7 +168,20 @@ impl CorelParser {
             println!("Error: Expected TIME at line: {}", token.line_number);
             return;
         }
-        let value = token.value.parse::<i32>().unwrap();
+
+        // Split the time into numeric value and unit
+        let time_str = &token.value;
+        let digits_end = time_str.trim_end_matches(|c: char| !c.is_digit(10)).len();
+        let (value_str, unit) = time_str.split_at(digits_end);
+
+        let value = match value_str.parse::<i32>() {
+            Ok(value) => value,
+            Err(_) => {
+                println!("Error: Invalid number in TIME at line: {}", token.line_number);
+                return;
+            }
+        };
+
         self.current_position += 1; // Skip the TIME token
 
         let token = self.tokens[self.current_position as usize].clone();
@@ -181,11 +192,11 @@ impl CorelParser {
         self.current_position += 1; // Skip the RPAREN token
 
         // Creating the AST node
-        let mut node = ASTnode::new(NodeType::WAIT);
-        let wait_node = WAITnode::new(value, token.value);
-        node.children.push(ASTnode::new(NodeType::WAIT));
-        self.nodes.push(node);
+        let wait_node = Box::new(WAITnode::new(value, unit.to_string()));
+        let ast_node = ASTnode::new(NodeType::WAIT(wait_node));
+        self.nodes.push(ast_node); 
     }
+
 
     fn parse_press(&mut self) {
         self.current_position += 1; // Skip the PRESS token
@@ -214,10 +225,9 @@ impl CorelParser {
         self.current_position += 1; // Skip the RPAREN token
 
         // Creating the AST node
-        let mut node = ASTnode::new(NodeType::PRESS);
-        let press_node = PRESSnode::new(value);
-        node.children.push(ASTnode::new(NodeType::PRESS));
-        self.nodes.push(node);
+        let press_node = Box::new(PRESSnode::new(value));
+        let ast_node = ASTnode::new(NodeType::PRESS(press_node));
+        self.nodes.push(ast_node);
     }
 
     fn parse_click(&mut self) {
@@ -247,10 +257,9 @@ impl CorelParser {
         self.current_position += 1; // Skip the RPAREN token
 
         // Creating the AST node
-        let mut node = ASTnode::new(NodeType::CLICK);
-        let click_node = CLICKnode::new(value);
-        node.children.push(ASTnode::new(NodeType::CLICK));
-        self.nodes.push(node);
+        let click_node = Box::new(CLICKnode::new(value));
+        let ast_node = ASTnode::new(NodeType::CLICK(click_node));
+        self.nodes.push(ast_node);
     }
 
     fn parse_loop(&mut self) {
@@ -298,10 +307,9 @@ impl CorelParser {
         }
 
         // Creating the AST node
-        let mut node = ASTnode::new(NodeType::LOOP);
-        let loop_node = LOOPnode::new(value);
-        node.children.push(ASTnode::new(NodeType::LOOP));
-        self.nodes.push(node);
+        let loop_node = Box::new(LOOPnode::new(value, children)); 
+        let ast_node = ASTnode::new(NodeType::LOOP(loop_node));
+        self.nodes.push(ast_node);
     }
 
     fn parse_move(&mut self) {
@@ -321,8 +329,15 @@ impl CorelParser {
                 println!("Error: Expected COORDINATE at line: {}", token.line_number);
                 return;
             },
-            "COORDINATES" => {
-                let value = token.value.parse::<i32>().unwrap();
+            "COORDINATE" => {
+                let (value_str, axis) = token.value.split_at(token.value.len() - 1);
+                let value = match value_str.parse::<i32>() {
+                    Ok(value) => value,
+                    Err(_) => {
+                        println!("Error: Invalid coordinate value at line: {}", token.line_number);
+                        return;
+                    }
+                };
                 self.current_position += 1; // Skip the COORDINATE token
 
                 let token = self.tokens[self.current_position as usize].clone();
@@ -334,10 +349,9 @@ impl CorelParser {
                 let value_string = value.to_string();
 
                 // Creating the AST node
-                let mut node = ASTnode::new(NodeType::MOVE);
-                let move_node = MOVEnode::new(value_string, token.value);
-                node.children.push(ASTnode::new(NodeType::MOVE));
-                self.nodes.push(node);
+                let move_node = Box::new(MOVEnode::new(value_string, axis.to_string()));
+                let ast_node = ASTnode::new(NodeType::MOVE(move_node));
+                self.nodes.push(ast_node);
             },
             _ => {
                 println!("Error: Invalid token type: {} at line: {}", token.r#type, token.line_number);
@@ -347,9 +361,10 @@ impl CorelParser {
 
     fn parse_key(&mut self) {
         let token = self.tokens[self.current_position as usize].clone();
-        let mut node = ASTnode::new(NodeType::KEY);    
-        let key_node = KEYnode::new(token.value);
-        node.children.push(ASTnode::new(NodeType::KEY));
-        self.nodes.push(node);
+
+        // Adding the KEY node to the AST
+        let key_node = Box::new(KEYnode::new(token.value.clone()));
+        let ast_node = ASTnode::new(NodeType::KEY(key_node));
+        self.nodes.push(ast_node);
     }
 }

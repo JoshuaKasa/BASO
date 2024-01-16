@@ -1,9 +1,10 @@
 use std::fs;
+use std::io;
 
 mod corel_lexer;
 mod corel_parser;
 
-fn main() {
+fn main() -> io::Result<()> {
     let source_code_path = "corel.corel";
     let source_code = fs::read_to_string(source_code_path)
         .expect("Something went wrong reading the file");
@@ -28,4 +29,7 @@ fn main() {
     // Parsing the tokens
     let ast = parser.parse();
     println!("AST: {:?}", ast);
+
+   
+    Ok(())
 }
