@@ -303,8 +303,9 @@ impl CorelParser {
                 break;
             }
             self.parse_line();
-            self.current_position += 1;
+            children.push(self.nodes.pop().unwrap());
         }
+        self.current_position += 1;
 
         // Creating the AST node
         let loop_node = Box::new(LOOPnode::new(value, children)); 
