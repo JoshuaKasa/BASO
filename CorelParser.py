@@ -1,4 +1,4 @@
-# COREL stands for: Command, Oriented, Recoil, Elimination, Language
+    # COREL stands for: Command, Oriented, Recoil, Elimination, Language
 import re
 from CorelLexer import CorelLexer
 
