@@ -1,6 +1,9 @@
 // TODO: Fix the LOOP node.
 // Current problem is: The parser is detecting the LOOP node correctly but then not correctly
-// parsing it's body, I have no idea how to parse each line of the body of the loop.
+// parsing it's body, I have no idea how to parse each line of the body of the loop. 
+// NOTE: I fixed it, the problem was the fact that I was always adding to the current position,
+// not remembering that the `parse_line` function already does that. So I was double adding to the
+// position, which made the parser skip the body of the loop and panic.
 
 extern crate regex;
 use regex::Regex;
@@ -305,7 +308,7 @@ impl CorelParser {
             self.parse_line();
             children.push(self.nodes.pop().unwrap());
         }
-        self.current_position += 1;
+        self.current_position += 1; // Skip the RBRACE token
 
         // Creating the AST node
         let loop_node = Box::new(LOOPnode::new(value, children)); 
