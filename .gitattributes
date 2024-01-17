@@ -1,4 +1,8 @@
-# Auto detect text files and perform LF normalization
-* text=auto
-*.mk linguist-detectable=false
-Makefile.txt linguist-detectable=false
+# Linguist configuration for GitHub repository
+
+# Mark all files as vendored to exclude them from language statistics
+* linguist-vendored
+
+# Unmark Python and Rust files so they are included in language statistics
+*.py linguist-vendored=false
+*.rs linguist-vendored=false
