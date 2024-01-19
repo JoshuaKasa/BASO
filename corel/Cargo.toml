@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 regex = "1.10.2"
 winapi = { version = "0.3.9", features = ["winuser", "winreg"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
