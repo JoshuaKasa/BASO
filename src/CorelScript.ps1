@@ -7,6 +7,9 @@ if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Exit
 }
 
+# General output text
+Write-Output "Welcome to the Corel installer script!"
+
 # Get the directory of the CorelInstaller.ps1 script
 $installerScriptPath = Split-Path -Parent -Path $MyInvocation.MyCommand.Definition
 
@@ -20,14 +23,15 @@ $corelDirectory = Join-Path -Path $parentDirectory -ChildPath "corel"
 $systemPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
 
 # Check if the corel directory is already in the PATH
+Write-Output "Installation started..."
 if (-not $systemPath.Contains($corelDirectory)) {
     # Append the new corel directory to the system PATH
     $newPath = $systemPath + ";" + $corelDirectory
     [Environment]::SetEnvironmentVariable("Path", $newPath, [EnvironmentVariableTarget]::Machine)
-    Write-Output "Corel interpreter directory added to system PATH: $corelDirectory"
+    Write-Output "Installation complete: $corelDirectory"
 } 
 else {
-    Write-Output "Corel interpreter directory already in system PATH"
+    Write-Output "Corel is already installed: $corelDirectory"
 }
 
-Read-Host -Prompt "Press Enter to exit" # Wait for user input before closing the window
+Read-Host -Prompt "Press Enter to exit setup..." # Wait for user input before closing the window
