@@ -1,8 +1,0 @@
-// This is a test file for the CORES programming language
-wait(10ds)
-click('left')
-loop (3) {
-    wait(5ms)
-    press("f")
-    press('space')
-}
