@@ -1,3 +1,10 @@
+# IMPORTANT:
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# This Python file was changed into a .txt file for preventing it from adding into the languages percentage in the project.
+# If you want to test this old files you can just replace the .txt extension with the .py extension
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
 # This is the COREL interpreter, which will take the AST and execute it.
 # For those wondering the difference between an interpreter and a compiler:
 # A compiler will take the source code and translate it into machine code.

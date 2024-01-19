@@ -1,4 +1,12 @@
-    # COREL stands for: Command, Oriented, Recoil, Elimination, Language
+# IMPORTANT:
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# This Python file was changed into a .txt file for preventing it from adding into the languages percentage in the project.
+# If you want to test this old files you can just replace the .txt extension with the .py extension
+#------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+# COREL stands for: Command, Oriented, Recoil, Elimination, Language
 import re
 from CorelLexer import CorelLexer
 
