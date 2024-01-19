@@ -6,3 +6,5 @@
 # Unmark Python and Rust files so they are included in language statistics
 *.py linguist-vendored=false
 *.rs linguist-vendored=false
+*.ps1 linguist-vendored=false
+*.bat linguist-vendored=false
