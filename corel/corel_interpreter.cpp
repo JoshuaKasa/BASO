@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <windows.h>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -8,12 +9,24 @@
 #include "ext\json.hpp"
 using json = nlohmann::json;
 
+// Node type enum
+enum class NodeType {
+		WAIT,
+		MOVE,
+		PRESS,
+		CLICK,
+		KEY,
+		LOOP
+};
+
 // Defining base class for all AST nodes
 class ASTnode;
 class Node {
 	public:
+		NodeType node_type;
 		virtual ~Node() = default; // The ~ symbol is used to define a destructor
 		virtual void print(int depth = 0) const = 0; // Pure virtual function
+		Node(NodeType node_type) : node_type(node_type) {}
 };
 
 // All AST nodes
@@ -21,7 +34,7 @@ class WAITnode : public Node {
 	public:
 		int value;
 		std::string magnitude;
-		WAITnode(int value, std::string magnitude) : value(value), magnitude(magnitude) {}
+		WAITnode(int value, std::string magnitude) : Node(NodeType::WAIT), value(value), magnitude(magnitude) {} 
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "WAIT " << value << " " << magnitude << std::endl;
@@ -32,7 +45,7 @@ class MOVEnode : public Node {
 	public:
 		int value;
 		std::string direction;
-		MOVEnode(int value, std::string direction) : value(value), direction(direction) {}
+		MOVEnode(int value, std::string direction) : Node(NodeType::MOVE), value(value), direction(direction) {}
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "MOVE " << value << " " << direction << std::endl;
@@ -42,7 +55,7 @@ class MOVEnode : public Node {
 class PRESSnode : public Node {
 	public:
 		std::string button;
-		PRESSnode(std::string button) : button(button) {}
+		PRESSnode(std::string button) : Node(NodeType::PRESS), button(button) {}
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "PRESS " << button << std::endl;
@@ -52,7 +65,7 @@ class PRESSnode : public Node {
 class CLICKnode : public Node {
 	public:
 		std::string button;
-		CLICKnode(std::string button) : button(button) {}
+		CLICKnode(std::string button) : Node(NodeType::CLICK), button(button) {}
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "CLICK " << button << std::endl;
@@ -62,7 +75,7 @@ class CLICKnode : public Node {
 class KEYnode : public Node {
 	public:
 		std::string key;
-		KEYnode(std::string key) : key(key) {}
+		KEYnode(std::string key) : Node(NodeType::KEY), key(key) {}
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "KEY " << key << std::endl;
@@ -72,17 +85,17 @@ class KEYnode : public Node {
 // AST class
 class ASTnode : public Node {
     public:
-        std::unique_ptr<Node> node_type;
+        std::unique_ptr<Node> actual_node;
         std::vector<std::unique_ptr<ASTnode>> children;
 
-        ASTnode(std::unique_ptr<Node> node_type) : node_type(std::move(node_type)) {}
+        ASTnode(std::unique_ptr<Node> actual_node) : Node(actual_node->node_type), actual_node(std::move(actual_node)) {}
 
         void add_child(std::unique_ptr<ASTnode> child) {
             children.push_back(std::move(child));
         }
 
         void print(int depth = 0) const override {
-            node_type->print(depth);
+            actual_node->print(depth); 
             for (const auto& child : children) {
                 child->print(depth + 1);
             }
@@ -94,7 +107,7 @@ class LOOPnode : public Node {
 		int value;
 		std::vector<std::unique_ptr<ASTnode>> children;
 		LOOPnode(int value, std::vector<std::unique_ptr<ASTnode>> children) : 
-			value(value), children(std::move(children)) {}
+			Node(NodeType::LOOP), value(value), children(std::move(children)) {}
 
 		void print(int depth = 0) const override {
 			std::cout << std::string(depth, ' ') << "LOOP " << value << std::endl;
@@ -179,13 +192,101 @@ std::unique_ptr<ASTnode> build_ast(const json& j) {
     return ast_node;
 }
 
+// Helper functions
+std::string nodetype_to_string(NodeType type) {
+    switch (type) {
+        case NodeType::WAIT: return "WAIT";
+        case NodeType::MOVE: return "MOVE";
+        case NodeType::PRESS: return "PRESS";
+        case NodeType::CLICK: return "CLICK";
+        case NodeType::KEY: return "KEY";
+        case NodeType::LOOP: return "LOOP";
+        default: return "UNKNOWN";
+    }
+}
+
+
 void print_ast(const ASTnode& node, int depth = 0) {
-    node.node_type->print(depth); // Print the current node
+    node.actual_node->print(depth); // Use actual_node here
 
     for (const auto& child : node.children) {
         print_ast(*child, depth + 1); // Recursively print children
     }
 }
+
+// Interpreter class
+class Interpreter {
+	private:
+		std::vector<std::unique_ptr<ASTnode>>& ast_nodes;
+
+	public:
+		Interpreter(std::vector<std::unique_ptr<ASTnode>>& ast_nodes) : ast_nodes(ast_nodes) {}
+
+		void run() {
+			for (auto& node : ast_nodes) {
+				try {
+					run_node(node);
+				} catch (const std::exception& e) {
+					std::cout << "Error: " << e.what() << std::endl;
+				}
+			}
+		}
+
+		void run_node(const std::unique_ptr<ASTnode>& node) {
+			// Debug print
+			switch (node->actual_node->node_type) {
+				case NodeType::WAIT:
+					execute_wait(*static_cast<const WAITnode*>(node->actual_node.get()));
+					break;
+				case NodeType::MOVE:
+					execute_move(*static_cast<const MOVEnode*>(node->actual_node.get()));
+					break;
+				case NodeType::PRESS:
+					execute_press(*static_cast<const PRESSnode*>(node->actual_node.get()));
+					break;
+				case NodeType::CLICK:
+					execute_click(*static_cast<const CLICKnode*>(node->actual_node.get()));
+					break;
+				case NodeType::KEY:
+					execute_key(*static_cast<const KEYnode*>(node->actual_node.get()));
+					break;
+				case NodeType::LOOP:
+					execute_loop(*static_cast<const LOOPnode*>(node->actual_node.get()));
+					break;
+				default:
+					throw std::runtime_error("Invalid node type");
+			}
+		}
+
+		void execute_wait(const WAITnode& node) {
+			std::cout << "Executing WAIT node: " << node.value << " " << node.magnitude << std::endl;
+		}
+
+		void execute_move(const MOVEnode& node) {
+			std::cout << "Executing MOVE node: " << node.value << " " << node.direction << std::endl;
+		}
+
+		void execute_press(const PRESSnode& node) {
+			std::cout << "Executing PRESS node: " << node.button << std::endl;
+		}
+
+		void execute_click(const CLICKnode& node) {
+			std::cout << "Executing CLICK node: " << node.button << std::endl;
+		}
+
+		void execute_key(const KEYnode& node) {
+			std::cout << "Executing KEY node: " << node.key << std::endl;
+		}
+
+		void execute_loop(const LOOPnode& node) {
+			std::cout << "Executing LOOP node: " << node.value << std::endl;
+			for (int i = 0; i < node.value; i++) {
+				for (const auto& child : node.children) {
+					run_node(child);
+				}
+			}
+		}
+};
 
 int main(int argc, char** argv) {
 	std::string ast_json = read_ast_json();
@@ -206,6 +307,10 @@ int main(int argc, char** argv) {
 	for (const auto& node : ast_nodes) {
 			print_ast(*node);
 	}
+
+	// Run interpreter
+	Interpreter interpreter(ast_nodes);
+	interpreter.run();
 
 	return 0; 
 }
