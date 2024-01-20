@@ -8,3 +8,7 @@
 *.rs linguist-vendored=false
 *.ps1 linguist-vendored=false
 *.bat linguist-vendored=false
+*.cpp linguist-vendor=false
+
+# Marking external directory as vendor
+corel/ext/* linguist-vendoe
