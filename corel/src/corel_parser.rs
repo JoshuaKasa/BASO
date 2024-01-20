@@ -5,13 +5,12 @@
 // not remembering that the `parse_line` function already does that. So I was double adding to the
 // position, which made the parser skip the body of the loop and panic.
 
-extern crate regex;
-use regex::Regex;
-
+use serde::{Serialize, Deserialize};
 use crate::corel_lexer;
+use std::fs;
 
 // AST nodes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeType {
     WAIT(Box<WAITnode>),
     PRESS(Box<PRESSnode>),
@@ -22,7 +21,7 @@ pub enum NodeType {
 }
 
 // AST nodes struct
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ASTnode {
     node_type: NodeType,
     children: Vec<ASTnode>
@@ -40,7 +39,7 @@ impl ASTnode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WAITnode {
     value: i32,
     magnitude: String
@@ -53,7 +52,7 @@ impl WAITnode {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PRESSnode {
     value: String
 }
@@ -64,7 +63,7 @@ impl PRESSnode {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KEYnode {
     value: String
 }
@@ -75,7 +74,7 @@ impl KEYnode {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CLICKnode {
     value: String
 }
@@ -86,7 +85,7 @@ impl CLICKnode {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LOOPnode {
     value: i32,
     children: Vec<ASTnode>
@@ -99,13 +98,13 @@ impl LOOPnode {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MOVEnode {
-    value: String,
+    value: i16,
     direction: String
 }
 impl MOVEnode {
-    pub fn new(value: String, direction: String) -> Self {
+    pub fn new(value: i16, direction: String) -> Self {
         Self {
             value: value,
             direction: direction
@@ -152,7 +151,15 @@ impl CorelParser {
             self.parse_line();
             self.current_position += 1;
         }
-        self.nodes.clone() // Returning the AST (cloned for borrow checker)
+        // Before returning the AST, we will pass it to a JSON file
+        // so that we can use it in the interpreter
+        let ast = self.nodes.clone();
+        let ast_json = serde_json::to_string(&ast)
+            .expect("Error: Could not convert AST to JSON");
+        fs::write("ast.json", ast_json)
+            .expect("Error: Could not write AST to file");
+        
+        ast // Returning the AST (cloned for borrow checker)
     }
 
     fn parse_wait(&mut self) {
@@ -350,10 +357,10 @@ impl CorelParser {
                     return;
                 }
                 self.current_position += 1; // Skip the RPAREN token
-                let value_string = value.to_string();
+                let value_int = value as i16;
 
                 // Creating the AST node
-                let move_node = Box::new(MOVEnode::new(value_string, axis.to_string()));
+                let move_node = Box::new(MOVEnode::new(value_int, axis.to_string()));
                 let ast_node = ASTnode::new(NodeType::MOVE(move_node));
                 self.nodes.push(ast_node);
             },

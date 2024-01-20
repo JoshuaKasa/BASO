@@ -4,5 +4,6 @@
 loop (5) {
     move(100x)
     move(50y)
+    press("k")
     wait(1ms)
 }
