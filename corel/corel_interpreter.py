@@ -1,6 +1,7 @@
 import re
 import time
 import sys
+import json
 import ctypes
 import pyautogui
 
@@ -14,8 +15,12 @@ MOUSEEVENTF_MOVE = 0x0001 # This constant is taken from the Windows API
 def move_cursor(x, y):
     ctypes.windll.user32.mouse_event(MOUSEEVENTF_MOVE, x, y, 0, 0)
 
+# pyautogui minimum time between clicks
+pyautogui.MINIMUM_DURATION = 0
+pyautogui.MINIMUM_SLEEP = 0
+pyautogui.PAUSE = 0
+
 # Nodes
-# Building the AST
 class ASTnode:
     def __init__(self, type):
         self.type = type
@@ -157,8 +162,48 @@ class CorelInterpreter:
                 self.execute_node(child)
 
 # Debug code
+def build_ast_from_json(json_file):
+    def create_node(node_data):
+        node_type = list(node_data['node_type'].keys())[0]
+        node_info = node_data['node_type'][node_type]
+
+        if node_type == "KEY":
+            return KEYnode(node_type, node_info['value'])
+        elif node_type == "LOOP":
+            loop_node = LOOPnode(node_type, node_info['value'])
+            for child in node_info['children']:  # Look into 'children' inside 'node_type'
+                loop_node.children.append(create_node(child))
+            return loop_node
+        elif node_type == "MOVE":
+            return MOVEnode(node_type, node_info['direction'], node_info['value'])
+        elif node_type == "PRESS":
+            return PRESSnode(node_type, node_info['value'])
+        elif node_type == "WAIT":
+            return WAITnode(node_type, node_info['value'], node_info['magnitude'])
+        else:
+            raise Exception(f'Unknown node type: {node_type}')
+
+    ast = []
+    for node in json_file:
+        ast.append(create_node(node))
+    
+    return ast
+
 def main(arg):
-    pass
+    print('AST from JSON:')
+    with open(arg, 'r') as file:
+        json_data = json.load(file)
+        ast = build_ast_from_json(json_data)
+   
+    for node in ast:
+        print(node)
+        if isinstance(node, LOOPnode):
+            for child in node.children:
+                print('\t' + str(child))
+
+    print('\nRunning interpreter...')
+    interpreter = CorelInterpreter(ast)
+    interpreter.run()
 
 if __name__ == '__main__':
     main(sys.argv[1])
