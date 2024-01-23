@@ -1,0 +1,9 @@
+// Frost macro, whenever you press 'H' it moves the cursor 300 pixels down and then presses the left mouse button 3 times
+--<k>
+
+loop (5) {
+    move(100x)
+    move(50y)
+    press("k")
+    wait(1ms)
+}

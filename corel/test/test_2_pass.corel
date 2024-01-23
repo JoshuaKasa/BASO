@@ -1,0 +1,6 @@
+--<s>
+
+wait(1ms)
+loop (10) {
+    press('m')
+}

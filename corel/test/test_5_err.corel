@@ -1,0 +1,3 @@
+wait(3)
+wait(3s)
+// Not a time token error

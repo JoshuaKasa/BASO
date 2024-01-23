@@ -1,0 +1,6 @@
+wait(3s
+loop (1) {
+    click('right')
+}
+
+// Missing parenthesis error
