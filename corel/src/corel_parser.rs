@@ -4,6 +4,11 @@
 // NOTE: I fixed it, the problem was the fact that I was always adding to the current position,
 // not remembering that the `parse_line` function already does that. So I was double adding to the
 // position, which made the parser skip the body of the loop and panic.
+// TODO: For some reason the parser is not some of the nodes correctly. I don't even get which or
+// what is causing this, I gotta debug and fix it.
+// NOTE: Stupid fucking problem. My dumb ass was updating the current position inside the 'run'
+// function so some tokens got skipped and a mess created. Another problem was the fact that I
+// wasn't updating the current token position inside the 'key' node, so a infinite loop created.
 
 use serde::{Serialize, Deserialize};
 use crate::corel_lexer;
@@ -142,14 +147,13 @@ impl CorelParser {
             "LOOP" => self.parse_loop(),
             "MOVE" => self.parse_move(),
             "COMMENT" => return,
-            _ => println!("Error: Invalid token type: {} at line: {}", token_type, token.line_number),
+            _ => println!("Error: Invalid token type: {} at line: {}. Current ", token_type, token.line_number),
         }
     }
 
     pub fn parse(&mut self) -> Vec<ASTnode> {
         while self.current_position < self.tokens.len() as i32 {
             self.parse_line();
-            self.current_position += 1;
         }
         // Before returning the AST, we will pass it to a JSON file
         // so that we can use it in the interpreter
@@ -377,5 +381,7 @@ impl CorelParser {
         let key_node = Box::new(KEYnode::new(token.value.clone()));
         let ast_node = ASTnode::new(NodeType::KEY(key_node));
         self.nodes.push(ast_node);
+
+        self.current_position += 1; // Skip the KEY token
     }
 }
