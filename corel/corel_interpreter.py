@@ -149,6 +149,7 @@ class CorelInterpreter:
             raise Exception(f'Invalid direction: {node.direction}\nValid directions: x, y')
 
     def execute_CLICK(self, node):
+        print(f'Clicking {node.value}...')
         valid_buttons = ['left', 'middle', 'right']
         if node.value not in valid_buttons:
             raise Exception(f'Invalid button: {node.value}\nValid buttons: {valid_buttons}')
@@ -180,6 +181,8 @@ def build_ast_from_json(json_file):
             return PRESSnode(node_type, node_info['value'])
         elif node_type == "WAIT":
             return WAITnode(node_type, node_info['value'], node_info['magnitude'])
+        elif node_type == "CLICK":
+            return CLICKnode(node_type, node_info['value'])
         else:
             raise Exception(f'Unknown node type: {node_type}')
 
@@ -190,16 +193,17 @@ def build_ast_from_json(json_file):
     return ast
 
 def main(arg):
-    print('AST from JSON:')
+    # print('AST from JSON:')
     with open(arg, 'r') as file:
         json_data = json.load(file)
         ast = build_ast_from_json(json_data)
-   
-    for node in ast:
-        print(node)
-        if isinstance(node, LOOPnode):
-            for child in node.children:
-                print('\t' + str(child))
+    
+    # This is done for debug purposes, which we don't need atm.
+    # for node in ast:
+    #     print(node)
+    #     if isinstance(node, LOOPnode):
+    #         for child in node.children:
+    #             print('\t' + str(child))
 
     print('\nRunning interpreter...')
     interpreter = CorelInterpreter(ast)

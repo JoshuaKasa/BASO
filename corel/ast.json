@@ -1,1 +1,1 @@
-[{"node_type":{"KEY":{"value":"--<k>"}},"children":[]},{"node_type":{"LOOP":{"value":5,"children":[{"node_type":{"MOVE":{"value":100,"direction":"x"}},"children":[]},{"node_type":{"MOVE":{"value":50,"direction":"y"}},"children":[]},{"node_type":{"PRESS":{"value":"\"k\""}},"children":[]},{"node_type":{"WAIT":{"value":1,"magnitude":"ms"}},"children":[]}]}},"children":[]}]
+[{"node_type":{"LOOP":{"value":1,"children":[{"node_type":{"CLICK":{"value":"'right'"}},"children":[]}]}},"children":[]}]
