@@ -21,3 +21,4 @@ Twitch - Y: 25 - X: -1 - Delay: 17 ms
 Smoke - Y: 15 - X: 1 - Delay: 17 ms
 Wamai - Y: 14 - X: -1 - Delay: 17 ms
 Buck - Y: 27 - X: -1 - Delay: 20 ms
+Maverick - Y: 8 - X: -1 - Delay: 14 ms
