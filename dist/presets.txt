@@ -22,3 +22,7 @@ Smoke - Y: 15 - X: 1 - Delay: 17 ms
 Wamai - Y: 14 - X: -1 - Delay: 17 ms
 Buck - Y: 27 - X: -1 - Delay: 20 ms
 Maverick - Y: 8 - X: -1 - Delay: 14 ms
+Flores - Y: 16 - X: -1 - Delay: 20 ms
+Mozzie - Y: 12 - X: -1 - Delay: 20 ms
+Goyo - Y: 11 - X: -1 - Delay: 12 ms
+Pulse shotgun - Y: 100 - X: -1 - Delay: 29 ms
