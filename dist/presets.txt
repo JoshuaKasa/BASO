@@ -26,3 +26,4 @@ Flores - Y: 16 - X: -1 - Delay: 20 ms
 Mozzie - Y: 12 - X: -1 - Delay: 20 ms
 Goyo - Y: 11 - X: -1 - Delay: 12 ms
 Pulse shotgun - Y: 100 - X: -1 - Delay: 29 ms
+Amaru - Y: 22 - X: -3 - Delay: 20 ms
