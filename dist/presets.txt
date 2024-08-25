@@ -22,3 +22,4 @@ Frost - Y: 28 - X: 1 - Delay: 20 ms
 Dokka - Y: 33 - X: 7 - Delay: 20 ms
 Buck - Y: 21 - X: -1 - Delay: 17 ms
 Gridlock - Y: 28 - X: -1 - Delay: 20 ms
+Melusi - Y: 17 - X: -1 - Delay: 17 ms
