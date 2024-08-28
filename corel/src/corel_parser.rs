@@ -1,15 +1,3 @@
-// TODO: Fix the LOOP node.
-// Current problem is: The parser is detecting the LOOP node correctly but then not correctly
-// parsing it's body, I have no idea how to parse each line of the body of the loop. 
-// NOTE: I fixed it, the problem was the fact that I was always adding to the current position,
-// not remembering that the `parse_line` function already does that. So I was double adding to the
-// position, which made the parser skip the body of the loop and panic.
-// TODO: For some reason the parser is not some of the nodes correctly. I don't even get which or
-// what is causing this, I gotta debug and fix it.
-// NOTE: Stupid fucking problem. My dumb ass was updating the current position inside the 'run'
-// function so some tokens got skipped and a mess created. Another problem was the fact that I
-// wasn't updating the current token position inside the 'key' node, so a infinite loop created.
-
 use serde::{Serialize, Deserialize};
 use crate::corel_lexer;
 use std::fs;
@@ -146,7 +134,7 @@ impl CorelParser {
             "CLICK" => self.parse_click(),
             "LOOP" => self.parse_loop(),
             "MOVE" => self.parse_move(),
-            "COMMENT" => return,
+            "COMMENT" => self.current_position += 1, // Skip the COMMENT token
             _ => println!("Error: Invalid token type: {} at line: {}. Current ", token_type, token.line_number),
         }
     }
@@ -154,6 +142,7 @@ impl CorelParser {
     pub fn parse(&mut self) -> Vec<ASTnode> {
         while self.current_position < self.tokens.len() as i32 {
             self.parse_line();
+            // println!("Current position: {}", self.current_position);
         }
         // Before returning the AST, we will pass it to a JSON file
         // so that we can use it in the interpreter
