@@ -24,3 +24,5 @@ Buck - Y: 21 - X: -1 - Delay: 17 ms
 Gridlock - Y: 28 - X: -1 - Delay: 20 ms
 Melusi - Y: 7 - X: 1 - Delay: 17 ms
 Lion - Y: 11 - X: 1 - Delay: 26 ms
+Wamai 2 - Y: 22 - X: 1 - Delay: 41 ms
+Pulse - Y: 9 - X: -1 - Delay: 26 ms
