@@ -8,7 +8,6 @@ fn main() -> io::Result<()> {
     let source_code_path = "corel.corel";
     let source_code = fs::read_to_string(source_code_path)
         .expect("Something went wrong reading the file");
-    println!("Source code:\n{}", source_code);
     
     // Creating the lexer
     let lexer = corel_lexer::CorelLexer {
@@ -18,7 +17,6 @@ fn main() -> io::Result<()> {
 
     // Tokenizing the source code
     let tokens = lexer.tokenize();
-    println!("Tokens: {:?}", tokens);
 
     // Creating the parser
     let mut parser = corel_parser::CorelParser {
@@ -27,8 +25,7 @@ fn main() -> io::Result<()> {
     };
 
     // Parsing the tokens
-    let ast = parser.parse();
-    println!("AST: {:?}", ast);
+    let _ast = parser.parse();
 
    
     Ok(())

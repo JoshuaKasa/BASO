@@ -1,8 +1,6 @@
 extern crate regex;
 use regex::Regex;
 
-use std::collections::HashMap;
-
 #[derive(Debug, Clone)]
 pub struct Token {
     pub r#type: String,
@@ -76,28 +74,26 @@ impl CorelLexer {
         tokens
     }
 
-    fn initialize_regex_tokens() -> HashMap<String, Regex> {
-        let mut regex_tokens = HashMap::new();
+    fn initialize_regex_tokens() -> Vec<(String, Regex)> {
+        // Order matters here: more specific patterns are placed before broader ones.
+        let regex_tokens = vec![
+            ("STARTKEY".to_string(), Regex::new(r"--<[^>\r\n]+>").unwrap()),
+            ("WAIT".to_string(), Regex::new(r"\bwait\b").unwrap()),
+            ("MOVE".to_string(), Regex::new(r"\bmove\b").unwrap()),
+            ("PRESS".to_string(), Regex::new(r"\bpress\b").unwrap()),
+            ("CLICK".to_string(), Regex::new(r"\bclick\b").unwrap()),
+            ("LOOP".to_string(), Regex::new(r"\bloop\b").unwrap()),
+            ("STRING".to_string(), Regex::new(r#"('([^']*)')|(\"([^\"]*)\")"#).unwrap()),
+            ("TIME".to_string(), Regex::new(r"\b\d+(s|ms|cs|ds)\b").unwrap()),
+            ("COORDINATE".to_string(), Regex::new(r"-?\d+(x|y)\b").unwrap()),
+            ("NUMBER".to_string(), Regex::new(r"\b[0-9]+\b").unwrap()),
+            ("COMMENT".to_string(), Regex::new(r"//.*").unwrap()),
+            ("LPAREN".to_string(), Regex::new(r"\(\s*").unwrap()),
+            ("RPAREN".to_string(), Regex::new(r"\)\s*").unwrap()),
+            ("LBRACE".to_string(), Regex::new(r"\{\s*").unwrap()),
+            ("RBRACE".to_string(), Regex::new(r"\}\s*").unwrap()),
+        ];
 
-        // Inserting each regex pattern inside the HashMap
-        // Convert all keys to `String` using `.to_string()`
-        regex_tokens.insert("STARTKEY".to_string(), Regex::new(r"--<[a-zA-Z]+>").unwrap());
-        regex_tokens.insert("WAIT".to_string(), Regex::new(r"\bwait\b").unwrap());
-        regex_tokens.insert("MOVE".to_string(), Regex::new(r"\bmove\b").unwrap());
-        regex_tokens.insert("PRESS".to_string(), Regex::new(r"\bpress\b").unwrap());
-        regex_tokens.insert("CLICK".to_string(), Regex::new(r"\bclick\b").unwrap());
-        regex_tokens.insert("LOOP".to_string(), Regex::new(r"\bloop\b").unwrap());
-        regex_tokens.insert("STRING".to_string(), Regex::new(r#"('([^']*)')|(\"([^\"]*)\")"#).unwrap());
-        regex_tokens.insert("NUMBER".to_string(), Regex::new(r"\b[0-9]+\b").unwrap());
-        regex_tokens.insert("TIME".to_string(), Regex::new(r"\b\d+(s|ms|cs|ds)\b").unwrap());
-        regex_tokens.insert("COORDINATE".to_string(), Regex::new(r"-?\d+(x|y)\b").unwrap());
-        regex_tokens.insert("COMMENT".to_string(), Regex::new(r"//.*").unwrap());
-        regex_tokens.insert("LPAREN".to_string(), Regex::new(r"\(\s*").unwrap());
-        regex_tokens.insert("RPAREN".to_string(), Regex::new(r"\)\s*").unwrap());
-        regex_tokens.insert("LBRACE".to_string(), Regex::new(r"\{\s*").unwrap());
-        regex_tokens.insert("RBRACE".to_string(), Regex::new(r"\}\s*").unwrap());
-
-        // Return the HashMap
         regex_tokens
     }
 }

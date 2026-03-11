@@ -2,11 +2,21 @@ import sys
 import ctypes
 import os
 import json
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout, QCompleter, QFileDialog, QComboBox, QColorDialog
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp
-from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QBrush, QColor, QFont, QRegExpValidator, QTextCursor
+import re
+import shutil
+import subprocess
+import importlib.util
+import threading
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget,
+    QListWidgetItem, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout,
+    QCompleter, QFileDialog, QComboBox, QColorDialog, QMessageBox, QGroupBox, QFormLayout,
+    QSplitter
+)
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp, QProcess, QUrl
+from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont, QTextCursor, QDesktopServices
 import pyautogui
-from pynput import mouse
+from pynput import mouse, keyboard
 
 class ScriptEditor(QPlainTextEdit):
     def __init__(self, parent=None):
@@ -80,7 +90,7 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
         macro_font = QTextCharFormat()
         macro_font.setForeground(QColor(60, 64, 94))
         macro_font.setFontWeight(QFont.Bold)
-        macros = [r'--<[a-zA-Z]+>'] # e.g. --<macro>
+        macros = [r'--<[^>\n]+>'] # e.g. --<k> or --<ctrl+alt+k>
         self.add_rule(macros, macro_font)
 
         # Function
@@ -134,13 +144,40 @@ class ModMenu(QMainWindow):
     # Define signals
     start_recoil_signal = pyqtSignal()
     stop_recoil_signal = pyqtSignal()
+    run_script_signal = pyqtSignal(str, str)
+    inprocess_finished_signal = pyqtSignal(bool, str)
 
     def __init__(self, app):
         super().__init__()
         self.app = app
+        self.project_root = os.path.dirname(os.path.abspath(__file__))
+        self.presets_file = os.path.join(self.project_root, 'presets.txt')
+        self.theme_preferences_file = os.path.join(self.project_root, 'theme_preferences.json')
+        self.custom_theme_file = os.path.join(self.project_root, 'custom_theme.json')
+        self.script_bindings_file = os.path.join(self.project_root, 'script_bindings.json')
+        self.compact_size = (400, 300)
+        self.expanded_size = (920, 680)
+        self.compact_mode = False
+        self.recoil_activation_mode = "both"
+        self.current_script_path = None
+        self.corel_process = None
+        self.hotkey_listener = None
+        self.script_bindings = {}
+        self.script_runtime_cache = {}
+        self.corel_runtime_module = None
+        self.script_running_inprocess = False
+        self.script_state_lock = threading.Lock()
+
+        # Connect signals
+        self.start_recoil_signal.connect(self.start_recoil)
+        self.stop_recoil_signal.connect(self.stop_recoil)
+        self.run_script_signal.connect(self.run_script_from_hotkey)
+        self.inprocess_finished_signal.connect(self.on_inprocess_script_finished)
+
         self.initUI()
         self.load_presets()
         self.load_theme_preferences()
+        self.load_script_bindings()
 
         self.recoil_timer = QTimer()
         self.recoil_timer.timeout.connect(self.apply_recoil)
@@ -150,199 +187,497 @@ class ModMenu(QMainWindow):
         self.dragging = False
         self.offset = QPoint()
         self.setWindowOpacity(0.9)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self.apply_window_flags()
+
+        self.ui_stats_timer = QTimer(self)
+        self.ui_stats_timer.timeout.connect(self.update_runtime_summary)
+        self.ui_stats_timer.start(1500)
+        self.update_runtime_summary()
 
         # Start the mouse listener
         self.listener = mouse.Listener(on_click=self.on_global_click)
         self.listener.start()
 
-        # Connect signals
-        self.start_recoil_signal.connect(self.start_recoil)
-        self.stop_recoil_signal.connect(self.stop_recoil)
-
     def initUI(self):
-        self.app = QApplication([])
+        if self.app is None:
+            self.app = QApplication.instance() or QApplication([])
         self.app.setStyle("Fusion")
-
-        self.setWindowFlags(Qt.FramelessWindowHint)
         self.setWindowTitle('Rainbow 6 Siege Mod Menu')
-        self.setFixedSize(400, 300)
+
+        self.resize(*self.expanded_size)
+        self.setMinimumSize(760, 520)
+        self.setMaximumSize(16777215, 16777215)
+        self.compact_mode = False
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
 
-        tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget()
         central_layout = QVBoxLayout()
-        central_layout.addWidget(tab_widget)
+        central_layout.setContentsMargins(8, 8, 8, 8)
+        central_layout.setSpacing(8)
+        central_layout.addWidget(self.tab_widget)
         central_widget.setLayout(central_layout)
 
         recoil_tab = QWidget()
         config_tab = QWidget()
         script_tab = QWidget()
+        themes_tab = QWidget()
+        options_tab = QWidget()
 
-        tab_widget.addTab(recoil_tab, 'Recoil')
-        tab_widget.addTab(config_tab, 'Configs')
-        tab_widget.addTab(script_tab, 'Scripts')
-        
-        # Create the recoil tab
-        recoil_layout = QVBoxLayout()
-        recoil_tab.setLayout(recoil_layout)
+        self.tab_widget.addTab(recoil_tab, 'Recoil')
+        self.tab_widget.addTab(config_tab, 'Configs')
+        self.tab_widget.addTab(script_tab, 'Scripts')
+        self.tab_widget.addTab(themes_tab, 'Themes')
+        self.tab_widget.addTab(options_tab, 'Options')
 
-        self.recoil_checkbox = QCheckBox('Recoil Manager', self)
+        self.createRecoilTab(recoil_tab)
+        self.createConfigsTab(config_tab)
+        self.createScriptsTab(script_tab)
+        self.createThemesTab(themes_tab)
+        self.createOptionsTab(options_tab)
+        self.apply_global_styles()
+        self.apply_tooltips()
+
+        self.update_slider_value(self.recoil_slider.value())
+        self.update_x_slider_value(self.recoil_x_slider.value())
+        self.update_delay_value(self.delay_slider.value())
+        self.update_current_script_label()
+        self.update_recoil_runtime_label()
+        self.update_recoil_info_panel()
+        self.refresh_script_library_list()
+        self.show()
+
+    def createRecoilTab(self, parent_widget):
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        state_group = QGroupBox("Runtime")
+        state_layout = QFormLayout(state_group)
+        self.recoil_checkbox = QCheckBox('Enable Recoil Manager', self)
         self.recoil_checkbox.stateChanged.connect(self.toggle_recoil)
-        recoil_layout.addWidget(self.recoil_checkbox)
+        state_layout.addRow("State", self.recoil_checkbox)
 
-        self.recoil_slider_label = QLabel('Recoil Control Y:')
-        recoil_layout.addWidget(self.recoil_slider_label)
+        self.recoil_activation_combo = QComboBox()
+        self.recoil_activation_combo.addItem("LMB + RMB", "both")
+        self.recoil_activation_combo.addItem("LMB only", "left")
+        self.recoil_activation_combo.addItem("RMB only", "right")
+        self.recoil_activation_combo.currentIndexChanged.connect(self.on_recoil_activation_changed)
+        self.recoil_activation_mode = self.recoil_activation_combo.currentData()
+        state_layout.addRow("Activation", self.recoil_activation_combo)
 
+        self.recoil_state_label = QLabel("Idle")
+        state_layout.addRow("Status", self.recoil_state_label)
+        layout.addWidget(state_group)
+
+        values_group = QGroupBox("Values")
+        values_layout = QVBoxLayout(values_group)
+        values_layout.setSpacing(6)
+
+        self.recoil_slider_label = QLabel('Recoil Control Y: 0')
+        values_layout.addWidget(self.recoil_slider_label)
         self.recoil_slider = QSlider(Qt.Horizontal)
         self.recoil_slider.setMinimum(0)
         self.recoil_slider.setMaximum(100)
         self.recoil_slider.valueChanged.connect(self.update_slider_value)
-        recoil_layout.addWidget(self.recoil_slider)
+        values_layout.addWidget(self.recoil_slider)
 
-        self.recoil_x_slider_label = QLabel('Recoil Control X:')
-        recoil_layout.addWidget(self.recoil_x_slider_label)
-        
+        self.recoil_x_slider_label = QLabel('Recoil Control X: 0')
+        values_layout.addWidget(self.recoil_x_slider_label)
         self.recoil_x_slider = QSlider(Qt.Horizontal)
         self.recoil_x_slider.setMinimum(-100)
         self.recoil_x_slider.setMaximum(100)
-        self.recoil_x_slider.setValue(0) # Start in the middle
+        self.recoil_x_slider.setValue(0)
         self.recoil_x_slider.valueChanged.connect(self.update_x_slider_value)
-        recoil_layout.addWidget(self.recoil_x_slider)
+        values_layout.addWidget(self.recoil_x_slider)
 
-        self.delay_slider_label = QLabel('Delay (ms):')
-        recoil_layout.addWidget(self.delay_slider_label)
-
+        self.delay_slider_label = QLabel('Delay (ms): 0')
+        values_layout.addWidget(self.delay_slider_label)
         self.delay_slider = QSlider(Qt.Horizontal)
-        self.delay_slider.setMinimum(0)
+        self.delay_slider.setMinimum(1)
         self.delay_slider.setMaximum(1000)
+        self.delay_slider.setValue(1)
         self.delay_slider.valueChanged.connect(self.update_delay_value)
-        recoil_layout.addWidget(self.delay_slider)
-        
-        # Create the config tab
-        config_layout = QVBoxLayout()
-        config_tab.setLayout(config_layout)
+        values_layout.addWidget(self.delay_slider)
+        layout.addWidget(values_group)
 
+        quick_actions = QHBoxLayout()
+        apply_once_button = QPushButton("Apply Once")
+        apply_once_button.clicked.connect(self.apply_recoil_once)
+        reset_button = QPushButton("Reset Values")
+        reset_button.clicked.connect(self.reset_recoil_values)
+        quick_actions.addWidget(apply_once_button)
+        quick_actions.addWidget(reset_button)
+        layout.addLayout(quick_actions)
+
+        guide_group = QGroupBox("Guide")
+        guide_layout = QVBoxLayout(guide_group)
+        self.recoil_info_box = QPlainTextEdit()
+        self.recoil_info_box.setReadOnly(True)
+        self.recoil_info_box.setMinimumHeight(120)
+        guide_layout.addWidget(self.recoil_info_box)
+        layout.addWidget(guide_group, 1)
+
+    def createConfigsTab(self, parent_widget):
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        name_row = QHBoxLayout()
+        self.preset_name_label = QLabel('Preset Name:')
+        self.preset_name_edit = QLineEdit()
+        self.preset_name_edit.setPlaceholderText("e.g. ak74-mid-range")
+        name_row.addWidget(self.preset_name_label)
+        name_row.addWidget(self.preset_name_edit)
+        layout.addLayout(name_row)
+
+        filter_row = QHBoxLayout()
+        filter_label = QLabel("Filter:")
+        self.preset_filter_input = QLineEdit()
+        self.preset_filter_input.setPlaceholderText("type to filter presets")
+        self.preset_filter_input.textChanged.connect(self.filter_preset_list)
+        filter_row.addWidget(filter_label)
+        filter_row.addWidget(self.preset_filter_input)
+        layout.addLayout(filter_row)
+
+        actions_row = QHBoxLayout()
         save_button = QPushButton('Save')
         save_button.clicked.connect(self.save_preset)
         load_button = QPushButton('Load')
         load_button.clicked.connect(self.load_preset)
-        config_layout.addWidget(save_button)
-        config_layout.addWidget(load_button)
-
-        self.preset_name_label = QLabel('Preset Name:')
-        self.preset_name_edit = QLineEdit()
-        config_layout.addWidget(self.preset_name_label)
-        config_layout.addWidget(self.preset_name_edit)
-
-        self.preset_list = QListWidget()
-        config_layout.addWidget(self.preset_list)
-
         delete_button = QPushButton('Delete')
         delete_button.clicked.connect(self.delete_preset)
-        config_layout.addWidget(delete_button)
+        rename_button = QPushButton('Rename')
+        rename_button.clicked.connect(self.rename_preset)
+        duplicate_button = QPushButton('Duplicate')
+        duplicate_button.clicked.connect(self.duplicate_preset)
+        actions_row.addWidget(save_button)
+        actions_row.addWidget(load_button)
+        actions_row.addWidget(delete_button)
+        actions_row.addWidget(rename_button)
+        actions_row.addWidget(duplicate_button)
+        layout.addLayout(actions_row)
 
-        # Create the script tab
-        script_layout = QVBoxLayout()
-        script_tab.setLayout(script_layout)
+        self.preset_list = QListWidget()
+        self.preset_list.itemSelectionChanged.connect(self.update_preset_summary_label)
+        self.preset_list.itemDoubleClicked.connect(lambda _item: self.load_preset())
+        layout.addWidget(self.preset_list)
 
-        #  Script editor
+        transfer_row = QHBoxLayout()
+        export_button = QPushButton("Export")
+        export_button.clicked.connect(self.export_presets)
+        import_button = QPushButton("Import")
+        import_button.clicked.connect(self.import_presets)
+        transfer_row.addWidget(export_button)
+        transfer_row.addWidget(import_button)
+        layout.addLayout(transfer_row)
+
+        self.preset_summary_label = QLabel("No preset selected")
+        self.preset_summary_label.setWordWrap(True)
+        layout.addWidget(self.preset_summary_label)
+
+    def createScriptsTab(self, parent_widget):
+        script_layout = QVBoxLayout(parent_widget)
+        script_layout.setContentsMargins(8, 8, 8, 8)
+        script_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        hotkey_label = QLabel("Hotkey:")
+        self.hotkey_input = QLineEdit()
+        self.hotkey_input.setPlaceholderText("optional override (e.g. ctrl+shift+k)")
+        self.auto_save_on_run_checkbox = QCheckBox("Auto-save before manual run")
+        self.auto_save_on_run_checkbox.setChecked(True)
+        top_row.addWidget(hotkey_label)
+        top_row.addWidget(self.hotkey_input, 1)
+        top_row.addWidget(self.auto_save_on_run_checkbox)
+        script_layout.addLayout(top_row)
+
+        split = QSplitter(Qt.Horizontal)
+        script_layout.addWidget(split, 1)
+
+        library_panel = QWidget()
+        library_layout = QVBoxLayout(library_panel)
+        library_layout.setContentsMargins(0, 0, 0, 0)
+        library_layout.setSpacing(6)
+        self.script_search_input = QLineEdit()
+        self.script_search_input.setPlaceholderText("Search .corel scripts")
+        self.script_search_input.textChanged.connect(self.refresh_script_library_list)
+        library_layout.addWidget(self.script_search_input)
+        self.script_library_list = QListWidget()
+        self.script_library_list.itemDoubleClicked.connect(self.open_script_from_library_item)
+        library_layout.addWidget(self.script_library_list, 1)
+
+        library_buttons = QHBoxLayout()
+        refresh_library_button = QPushButton("Refresh")
+        refresh_library_button.clicked.connect(self.refresh_script_library_list)
+        new_script_button = QPushButton("New")
+        new_script_button.clicked.connect(self.create_new_script)
+        open_scripts_folder_button = QPushButton("Folder")
+        open_scripts_folder_button.clicked.connect(self.open_script_folder)
+        library_buttons.addWidget(refresh_library_button)
+        library_buttons.addWidget(new_script_button)
+        library_buttons.addWidget(open_scripts_folder_button)
+        library_layout.addLayout(library_buttons)
+
+        self.script_library_stats_label = QLabel("0 scripts")
+        library_layout.addWidget(self.script_library_stats_label)
+
+        editor_panel = QWidget()
+        editor_layout = QVBoxLayout(editor_panel)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(6)
+
+        self.script_subtabs = QTabWidget()
+        editor_layout.addWidget(self.script_subtabs)
+
+        script_edit_tab = QWidget()
+        script_edit_layout = QVBoxLayout(script_edit_tab)
+        script_edit_layout.setContentsMargins(4, 4, 4, 4)
+        script_edit_layout.setSpacing(6)
+
+        self.current_script_label = QLabel("Current file: (none)")
+        self.current_script_label.setToolTip("")
+        script_edit_layout.addWidget(self.current_script_label)
+
         self.script_editor = ScriptEditor()
         self.highlighter = ScriptSyntaxHighlighter(self.script_editor.document())
-        script_layout.addWidget(self.script_editor)
+        script_edit_layout.addWidget(self.script_editor, 1)
 
-        completer = QCompleter(["wait", "press", "move", "loop", 'click'])
-        self.script_editor.setCompleter(completer)    
+        completer = QCompleter(["wait", "press", "move", "loop", "click"])
+        self.script_editor.setCompleter(completer)
 
-        script_management_layout = QVBoxLayout()
-        script_layout.addLayout(script_management_layout)
-
-        save_script_button = QPushButton('Save Script')
-        save_script_button.clicked.connect(self.save_script)
-        script_management_layout.addWidget(save_script_button)
-
-        load_script_button = QPushButton('Load Script')
+        edit_buttons_top = QHBoxLayout()
+        new_button = QPushButton('New')
+        new_button.clicked.connect(self.create_new_script)
+        load_script_button = QPushButton('Load')
         load_script_button.clicked.connect(self.load_script)
-        script_management_layout.addWidget(load_script_button)
+        save_script_button = QPushButton('Save')
+        save_script_button.clicked.connect(self.save_script)
+        edit_buttons_top.addWidget(new_button)
+        edit_buttons_top.addWidget(load_script_button)
+        edit_buttons_top.addWidget(save_script_button)
+        script_edit_layout.addLayout(edit_buttons_top)
 
-        delete_script_button = QPushButton('Delete Script')
+        edit_buttons_bottom = QHBoxLayout()
+        delete_script_button = QPushButton('Delete')
         delete_script_button.clicked.connect(self.delete_script)
-        script_management_layout.addWidget(delete_script_button)
+        bind_loaded_script_button = QPushButton('Bind Loaded Script')
+        bind_loaded_script_button.clicked.connect(self.bind_loaded_script_hotkey)
+        self.run_script_button = QPushButton('Run')
+        self.run_script_button.clicked.connect(self.run_script_clicked)
+        edit_buttons_bottom.addWidget(delete_script_button)
+        edit_buttons_bottom.addWidget(bind_loaded_script_button)
+        edit_buttons_bottom.addWidget(self.run_script_button)
+        script_edit_layout.addLayout(edit_buttons_bottom)
 
-        # Theme tab
-        themes_tab = QWidget()
-        tab_widget.addTab(themes_tab, 'Themes')
-        self.createThemesTab(themes_tab)
+        script_bindings_tab = QWidget()
+        bindings_layout = QVBoxLayout(script_bindings_tab)
+        bindings_layout.setContentsMargins(4, 4, 4, 4)
+        bindings_layout.setSpacing(6)
 
-        # Set the stylesheet
+        bindings_actions = QHBoxLayout()
+        bind_file_script_button = QPushButton('Bind Script File')
+        bind_file_script_button.clicked.connect(self.bind_script_file_hotkey)
+        remove_binding_button = QPushButton('Remove Selected')
+        remove_binding_button.clicked.connect(self.remove_selected_script_binding)
+        bindings_actions.addWidget(bind_file_script_button)
+        bindings_actions.addWidget(remove_binding_button)
+        bindings_layout.addLayout(bindings_actions)
+
+        self.script_binding_list = QListWidget()
+        self.script_binding_list.itemDoubleClicked.connect(self.open_script_from_binding_item)
+        bindings_layout.addWidget(self.script_binding_list, 1)
+
+        script_output_tab = QWidget()
+        output_layout = QVBoxLayout(script_output_tab)
+        output_layout.setContentsMargins(4, 4, 4, 4)
+        output_layout.setSpacing(6)
+        output_actions = QHBoxLayout()
+        clear_output_button = QPushButton("Clear Output")
+        clear_output_button.clicked.connect(self.clear_script_output)
+        self.clear_output_before_run_checkbox = QCheckBox("Clear on run")
+        self.clear_output_before_run_checkbox.setChecked(True)
+        output_actions.addWidget(clear_output_button)
+        output_actions.addWidget(self.clear_output_before_run_checkbox)
+        output_actions.addStretch()
+        output_layout.addLayout(output_actions)
+        self.script_output = QPlainTextEdit()
+        self.script_output.setReadOnly(True)
+        self.script_output.setPlaceholderText("Script execution output will appear here...")
+        output_layout.addWidget(self.script_output, 1)
+
+        self.script_subtabs.addTab(script_edit_tab, "Edit")
+        self.script_subtabs.addTab(script_bindings_tab, "Bindings")
+        self.script_subtabs.addTab(script_output_tab, "Output")
+
+        split.addWidget(library_panel)
+        split.addWidget(editor_panel)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 3)
+
+    def createOptionsTab(self, parent_widget):
+        layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        behavior_group = QGroupBox("Behavior")
+        behavior_layout = QVBoxLayout(behavior_group)
+        self.always_on_top_checkbox = QCheckBox("Keep window always on top")
+        self.always_on_top_checkbox.setChecked(True)
+        self.always_on_top_checkbox.stateChanged.connect(self.apply_window_flags)
+        self.compact_mode_checkbox = QCheckBox("Compact mode (400 x 300)")
+        self.compact_mode_checkbox.stateChanged.connect(self.toggle_compact_mode)
+        behavior_layout.addWidget(self.always_on_top_checkbox)
+        behavior_layout.addWidget(self.compact_mode_checkbox)
+        layout.addWidget(behavior_group)
+
+        actions_group = QGroupBox("Quick Actions")
+        actions_layout = QHBoxLayout(actions_group)
+        restart_hotkeys_button = QPushButton("Restart Hotkeys")
+        restart_hotkeys_button.clicked.connect(self.restart_hotkey_listener)
+        open_project_button = QPushButton("Open BASO Folder")
+        open_project_button.clicked.connect(self.open_project_folder)
+        clear_cache_button = QPushButton("Clear AST Cache")
+        clear_cache_button.clicked.connect(self.clear_script_runtime_cache)
+        actions_layout.addWidget(restart_hotkeys_button)
+        actions_layout.addWidget(open_project_button)
+        actions_layout.addWidget(clear_cache_button)
+        layout.addWidget(actions_group)
+
+        self.runtime_summary_label = QLabel("Runtime summary unavailable")
+        self.runtime_summary_label.setWordWrap(True)
+        layout.addWidget(self.runtime_summary_label)
+        layout.addStretch()
+
+    def apply_global_styles(self):
         self.setStyleSheet("""
             QSlider {
                 background-color: transparent;
                 height: 10px;
             }
             QSlider::groove:horizontal {
-                height: 10px;
-                border-radius: 5px;
+                height: 8px;
+                border-radius: 4px;
             }
             QSlider::handle:horizontal {
-                width: 15px;
-                margin: -2px 0;
+                width: 14px;
+                margin: -3px 0;
                 border-radius: 7px;
             }
             QCheckBox::indicator {
-                width: 20px;
-                height: 20px;
+                width: 18px;
+                height: 18px;
             }
-            QListWidget {
-                border: 1px solid #ccc;
-                border-radius: 10px;
+            QListWidget, QLineEdit, QPlainTextEdit, QComboBox {
+                border-radius: 6px;
+                padding: 3px;
             }
         """)
 
-        
-        self.show()
+    def apply_tooltips(self):
+        tips = {
+            "recoil_checkbox": "Enable recoil compensation while the trigger condition is active.",
+            "recoil_activation_combo": "Choose which mouse buttons trigger recoil compensation.",
+            "recoil_slider": "Vertical recoil movement in pixels per step.",
+            "recoil_x_slider": "Horizontal recoil movement. Negative = left, positive = right.",
+            "delay_slider": "Delay between recoil steps in milliseconds.",
+            "recoil_info_box": "Live summary and usage tips.",
+            "preset_name_edit": "Preset name used for Save/Rename actions.",
+            "preset_filter_input": "Filter presets by name or values.",
+            "preset_list": "Double-click a preset to load it.",
+            "hotkey_input": "Optional override hotkey (e.g. ctrl+shift+k). Leave empty to use script trigger.",
+            "auto_save_on_run_checkbox": "Automatically save current script before manual run.",
+            "script_search_input": "Filter discovered .corel files by name/path.",
+            "script_library_list": "Double-click a script to open it.",
+            "current_script_label": "Current file loaded in editor.",
+            "run_script_button": "Run current script immediately.",
+            "script_binding_list": "Double-click a binding to open its script.",
+            "clear_output_before_run_checkbox": "Clear output panel before each run.",
+            "theme_selector": "Choose a preset theme or custom theme.",
+            "always_on_top_checkbox": "Keep BASO above other windows.",
+            "compact_mode_checkbox": "Switch to compact window mode (400 x 300).",
+            "runtime_summary_label": "Live counters for presets, bindings, cache, and scripts.",
+        }
+        for attr_name, text in tips.items():
+            widget = getattr(self, attr_name, None)
+            if widget is not None:
+                widget.setToolTip(text)
+
+        if hasattr(self, "custom_color_buttons"):
+            for key, button in self.custom_color_buttons.items():
+                button.setToolTip(f"Set custom color for {key}.")
 
     def createThemesTab(self, parent_widget):
         layout = QVBoxLayout(parent_widget)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        # Dropdown for preset themes
+        top_row = QHBoxLayout()
+        theme_label = QLabel("Preset Theme:")
         self.theme_selector = QComboBox()
-        self.theme_selector.addItems(['default', 'gruvbox dark', 'serika dark', 'catpuccin mocha', 'milkshake', 'cafe', 'blueberry light', 'cheesecake', 'starclass', 'honey', 'hot chocolate', 'TMO', 'nene', 'nocto'])
-        layout.addWidget(self.theme_selector)
+        self.theme_selector.addItems(list(self.get_preset_themes().keys()) + ["custom"])
         self.theme_selector.currentIndexChanged.connect(self.applyPresetTheme)
+        top_row.addWidget(theme_label)
+        top_row.addWidget(self.theme_selector, 1)
+        layout.addLayout(top_row)
 
-        # Theme preview section
         self.createThemePreviewSection(layout)
+        self.createCustomThemeSection(layout)
 
     def createThemePreviewSection(self, layout):
-        # Add a label for preview
+        preview_group = QGroupBox("Preview")
+        preview_layout = QVBoxLayout(preview_group)
         preview_label = QLabel("Theme Preview")
         preview_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(preview_label)
+        preview_layout.addWidget(preview_label)
 
-        # Add a test button
         test_button = QPushButton("Test Button")
-        layout.addWidget(test_button)
+        preview_layout.addWidget(test_button)
 
-        # Add some sample text
         sample_text = QLabel("This is a sample text for theme preview.")
         sample_text.setAlignment(Qt.AlignCenter)
-        layout.addWidget(sample_text)
+        preview_layout.addWidget(sample_text)
 
-        # Add a slider for preview
         preview_slider = QSlider(Qt.Horizontal)
-        layout.addWidget(preview_slider)
+        preview_layout.addWidget(preview_slider)
 
-        # Add a checkbox for preview
         preview_checkbox = QCheckBox("Sample Checkbox")
-        layout.addWidget(preview_checkbox)
+        preview_layout.addWidget(preview_checkbox)
+        layout.addWidget(preview_group)
 
-    def applyPresetTheme(self):
-        theme_name = self.theme_selector.currentText()
-        self.save_theme_preferences(theme_name)
-        # List of presets:
-        preset_themes = {
+    def createCustomThemeSection(self, layout):
+        self.custom_color_buttons = {}
+        custom_group = QGroupBox("Custom Theme")
+        custom_layout = QFormLayout(custom_group)
+        for key in ["background", "primary", "secondary", "accent", "text"]:
+            button = QPushButton()
+            button.setMinimumWidth(140)
+            button.setProperty("color_key", key)
+            button.clicked.connect(self.chooseColor)
+            custom_layout.addRow(key.capitalize(), button)
+            self.custom_color_buttons[key] = button
+
+        actions = QHBoxLayout()
+        apply_custom = QPushButton("Apply Custom")
+        apply_custom.clicked.connect(self.applyCustomTheme)
+        reset_custom = QPushButton("Reset Custom")
+        reset_custom.clicked.connect(self.reset_custom_theme_colors)
+        save_custom = QPushButton("Save Custom")
+        save_custom.clicked.connect(self.save_current_custom_theme)
+        actions.addWidget(apply_custom)
+        actions.addWidget(reset_custom)
+        actions.addWidget(save_custom)
+        custom_layout.addRow(actions)
+        layout.addWidget(custom_group)
+
+        self.set_custom_theme_buttons(self.load_custom_theme_colors())
+
+    def get_preset_themes(self):
+        return {
+            "default": {
+                "background": "#e6e6e6", "primary": "#007BFF", "secondary": "#0056b3", "accent": "#0056b3", "text": "#ffffff"
+            },
             "gruvbox dark": {
                 "background": "#282828", "primary": "#fabd2f", "secondary": "#83a598", "accent": "#b16286", "text": "#ffffff"
             },
@@ -367,92 +702,137 @@ class ModMenu(QMainWindow):
             "cheesecake": {
                 "background": "#f4e0d3", "primary": "#5a4a42", "secondary": "#c6aa8e", "accent": "#805b36", "text": "#38220f"
             },
-            # I made these myself
             "honey": {
-                "background": "#FFF8E1",  # Light honey or cream
-                "primary": "#FFC107",    # Vibrant honey or gold
-                "secondary": "#FFB300",  # Deeper honey or amber
-                "accent": "#FFD54F",     # Soft honey or light amber
-                "text": "#795548"        # Rich brown, resembling honeycomb or bees
+                "background": "#FFF8E1", "primary": "#FFC107", "secondary": "#FFB300", "accent": "#FFD54F", "text": "#795548"
             },
-            "starclass": { # Inspired by Starbucks but I don't want to get sued so I'm calling it Starclass :thumbsup:
-                "background": "#D4E9E2",  # Light mint or soft green, reminiscent of a Starbucks cup
-                "primary": "#00704A",    # Starbucks green
-                "secondary": "#005241",  # Deeper green, for contrast
-                "accent": "#A5D6A7",     # Lighter green, for highlights
-                "text": "#3E2723"        # Dark brown, like coffee beans
+            "starclass": {
+                "background": "#D4E9E2", "primary": "#00704A", "secondary": "#005241", "accent": "#A5D6A7", "text": "#3E2723"
             },
-            "TMO": { # Inspired by BMO from Adventure Time
-                "background": "#A7DBC8",  # Soft teal, similar to BMO's body
-                "primary": "#59CE8F",     # Light green, like BMO's face
-                "secondary": "#507C7E",   # Darker teal, for contrast
-                "accent": "#A1E8AF",      # Pale green, for highlights
-                "text": "#3A4042"         # Dark grey, for text
+            "TMO": {
+                "background": "#A7DBC8", "primary": "#59CE8F", "secondary": "#507C7E", "accent": "#A1E8AF", "text": "#3A4042"
             },
-            "hot chocolate": { # Inspired by hot chocolate, coffee and marshmallows
-                "background": "#FFF4E6",  # Creamy off-white, like milk foam
-                "primary": "#8C5E58",     # Warm brown, like hot chocolate
-                "secondary": "#AA8073",   # Lighter brown, for contrast
-                "accent": "#D3A99A",      # Soft pink, reminiscent of marshmallows
-                "text": "#5A3B35"         # Darker brown, for text
+            "hot chocolate": {
+                "background": "#FFF4E6", "primary": "#8C5E58", "secondary": "#AA8073", "accent": "#D3A99A", "text": "#5A3B35"
             },
-            "nene": { # She is my beatiful, perfect girl. She has amazing blue eyes, and loves light blue and cyan. She is my everything. https://www.instagram.com/heyits.nene/
-                "background": "#E0F7FA",  # Light cyan, airy and light
-                "primary": "#4DD0E1",     # Light blue, like her eyes
-                "secondary": "#26C6DA",   # Slightly darker blue, for depth
-                "accent": "#B2EBF2",      # Pale blue, for a softer touch
-                "text": "#00838F"         # Dark teal, for readable text
+            "nene": {
+                "background": "#E0F7FA", "primary": "#4DD0E1", "secondary": "#26C6DA", "accent": "#B2EBF2", "text": "#00838F"
             },
-            'nocto': {
-                
-                'background': '#f5f5f5',
-                'primary': '#424242',
-                'secondary': '#bdbdbd',
-                'accent': '#eoeoeo',
-                'text': '#212121'
+            "nocto": {
+                "background": "#f5f5f5", "primary": "#424242", "secondary": "#bdbdbd", "accent": "#e0e0e0", "text": "#212121"
             },
-            'default': {
-                "background": "#e6e6e6", "primary": "#007BFF", "secondary": "#0056b3", "accent": "#0056b3", "text": "#ffffff"
-            }
         }
-        colors = preset_themes.get(theme_name, ['#ffffff', '#000000', '#888888'])
+
+    def applyPresetTheme(self):
+        if not hasattr(self, 'theme_selector'):
+            return
+        theme_name = self.theme_selector.currentText()
+        if theme_name == "custom":
+            colors = self.load_custom_theme_colors()
+            self.set_custom_theme_buttons(colors)
+        else:
+            colors = self.get_preset_themes().get(theme_name, self.get_preset_themes()["default"])
+            self.set_custom_theme_buttons(colors)
+
         self.applyTheme(colors)
+        self.save_theme_preferences(theme_name)
 
     def save_theme_preferences(self, theme_name):
         try:
-            with open('theme_preferences.json', 'w') as f:
-                json.dump({'theme': theme_name}, f)
-        except Exception as e:
-            print(f"Error saving theme preferences: {e}")
+            with open(self.theme_preferences_file, 'w') as file:
+                json.dump({'theme': theme_name}, file, indent=2)
+        except Exception as exc:
+            self.append_script_output(f"Error saving theme preferences: {exc}")
 
     def load_theme_preferences(self):
-        if os.path.exists('theme_preferences.json'):
+        theme_name = "default"
+        if os.path.exists(self.theme_preferences_file):
             try:
-                with open('theme_preferences.json', 'r') as f:
-                    theme_preferences = json.load(f)
-                    theme_name = theme_preferences.get('theme', 'default')
-                    index = self.theme_selector.findText(theme_name)
-                    if index >= 0:
-                        self.theme_selector.setCurrentIndex(index)
-                        self.applyPresetTheme()
-            except Exception as e:
-                print(f"Error loading theme preferences: {e}")
-        else:
-            print("Theme preferences file not found.")
+                with open(self.theme_preferences_file, 'r') as file:
+                    data = json.load(file)
+                if isinstance(data, dict) and isinstance(data.get('theme'), str):
+                    theme_name = data['theme']
+            except Exception as exc:
+                self.append_script_output(f"Error loading theme preferences: {exc}")
+
+        index = self.theme_selector.findText(theme_name)
+        if index < 0:
+            index = self.theme_selector.findText("default")
+        self.theme_selector.setCurrentIndex(index)
+        self.applyPresetTheme()
+
+    def set_custom_theme_buttons(self, colors):
+        for key, button in self.custom_color_buttons.items():
+            self.set_color_button_value(button, colors.get(key, "#ffffff"))
+
+    def set_color_button_value(self, button, color_hex):
+        normalized = QColor(color_hex).name() if QColor(color_hex).isValid() else "#ffffff"
+        button.setProperty("color_value", normalized)
+        button.setText(normalized)
+        button.setStyleSheet(f"background-color: {normalized};")
 
     def chooseColor(self):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            sender = self.sender()
-            sender.setStyleSheet(f'background-color: {color.name()}')
+        sender = self.sender()
+        if sender is None:
+            return
+        current = sender.property("color_value") or "#ffffff"
+        picked = QColorDialog.getColor(QColor(current), self, "Choose Color")
+        if picked.isValid():
+            self.set_color_button_value(sender, picked.name())
+
+    def get_custom_theme_colors(self):
+        colors = {}
+        defaults = self.get_preset_themes()["default"]
+        for key, button in self.custom_color_buttons.items():
+            raw = button.property("color_value")
+            colors[key] = raw if isinstance(raw, str) and QColor(raw).isValid() else defaults[key]
+        return colors
+
+    def save_current_custom_theme(self):
+        colors = self.get_custom_theme_colors()
+        self.save_custom_theme_colors(colors)
+        self.theme_selector.setCurrentText("custom")
+        self.applyCustomTheme()
+
+    def save_custom_theme_colors(self, colors):
+        try:
+            with open(self.custom_theme_file, 'w') as file:
+                json.dump(colors, file, indent=2)
+        except Exception as exc:
+            self.append_script_output(f"Error saving custom theme: {exc}")
+
+    def load_custom_theme_colors(self):
+        defaults = self.get_preset_themes()["default"].copy()
+        if not os.path.exists(self.custom_theme_file):
+            return defaults
+        try:
+            with open(self.custom_theme_file, 'r') as file:
+                data = json.load(file)
+            if isinstance(data, dict):
+                for key in defaults.keys():
+                    value = data.get(key)
+                    if isinstance(value, str) and QColor(value).isValid():
+                        defaults[key] = value
+        except Exception as exc:
+            self.append_script_output(f"Error loading custom theme: {exc}")
+        return defaults
+
+    def reset_custom_theme_colors(self):
+        defaults = self.get_preset_themes()["default"]
+        self.set_custom_theme_buttons(defaults)
+        self.save_custom_theme_colors(defaults)
+        self.theme_selector.setCurrentText("default")
+        self.applyPresetTheme()
 
     def applyCustomTheme(self):
-        colors = [btn.palette().button().color().name() for btn in self.custom_color_buttons]
+        colors = self.get_custom_theme_colors()
+        self.save_custom_theme_colors(colors)
         self.applyTheme(colors)
+        self.save_theme_preferences("custom")
 
     def applyTheme(self, colors):
-        if not all(key in colors for key in ['background', 'primary', 'secondary', 'accent', 'text']):
-            raise Exception('Invalid theme colors, must be a list of hex values for background, primary, secondary, accent, and text')
+        required_keys = {'background', 'primary', 'secondary', 'accent', 'text'}
+        if not isinstance(colors, dict) or not required_keys.issubset(colors.keys()):
+            raise Exception('Invalid theme colors, expected keys: background, primary, secondary, accent, text')
 
         self.setStyleSheet(f"""
             QMainWindow {{
@@ -460,13 +840,16 @@ class ModMenu(QMainWindow):
                 color: {colors['text']};
                 font-family: 'Segoe UI', Arial, sans-serif;
             }}
+            QWidget {{
+                color: {colors['text']};
+            }}
             QPushButton {{
                 background-color: {colors['primary']};
                 color: {colors['text']};
                 border: none;
                 border-radius: 4px;
                 padding: 6px 12px;
-                margin: 4px;
+                margin: 2px;
             }}
             QPushButton:hover {{
                 background-color: {colors['accent']};
@@ -487,7 +870,7 @@ class ModMenu(QMainWindow):
             }}
             QCheckBox {{
                 spacing: 5px;
-                color: {colors['text']};  /* Ensure text color for QCheckBox */
+                color: {colors['text']};
             }}
             QCheckBox::indicator {{
                 width: 18px;
@@ -495,8 +878,6 @@ class ModMenu(QMainWindow):
             }}
             QTabWidget::pane {{
                 border-top: 2px solid {colors['secondary']};
-                position: absolute;
-                top: -0.5em;
                 color: {colors['text']};
                 background: {colors['background']};
             }}
@@ -504,7 +885,7 @@ class ModMenu(QMainWindow):
                 background: {colors['secondary']};
                 color: {colors['text']};
                 border-bottom: 2px solid transparent;
-                padding: 10px;
+                padding: 8px 10px;
                 margin: 0px;
             }}
             QTabBar::tab:selected {{
@@ -516,86 +897,423 @@ class ModMenu(QMainWindow):
                 border-radius: 4px;
                 padding: 3px;
                 background: {colors['background']};
-                color: {colors['text']};  /* Ensure text color for input fields */
+                color: {colors['text']};
             }}
-            QComboBox::drop-down {{
-                border: none;
+            QGroupBox {{
+                border: 1px solid {colors['secondary']};
+                border-radius: 6px;
+                margin-top: 10px;
+                padding-top: 6px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 4px;
             }}
             QLabel {{
-                margin: 6px;
-                color: {colors['text']};  /* Ensure text color for QLabel */
+                color: {colors['text']};
             }}
         """)
 
-        # Update specific widgets if necessary
-        self.preset_list.setStyleSheet(f"color: {colors['text']};")
-        self.preset_name_edit.setStyleSheet(f"color: {colors['text']};")
-
     def update_slider_value(self, value):
         self.recoil_slider_label.setText(f'Recoil Control Y: {value}')
+        self.update_preset_summary_label()
+        self.update_recoil_info_panel()
 
     def update_x_slider_value(self, value):
         self.recoil_x_slider_label.setText(f'Recoil Control X: {value}')
+        self.update_preset_summary_label()
+        self.update_recoil_info_panel()
 
     def update_delay_value(self, value):
         self.delay_slider_label.setText(f'Delay (ms): {value}')
+        self.update_preset_summary_label()
+        self.update_recoil_info_panel()
+
+    def format_preset_text(self, name, y_value, x_value, delay):
+        return f'{name} - Y: {y_value} - X: {x_value} - Delay: {delay} ms'
+
+    def parse_preset_text(self, text):
+        match = re.match(r'^\s*(.*?)\s*-\s*Y:\s*(-?\d+)\s*-\s*X:\s*(-?\d+)\s*-\s*Delay:\s*(\d+)\s*ms\s*$', text)
+        if not match:
+            return None
+        return match.group(1), int(match.group(2)), int(match.group(3)), int(match.group(4))
+
+    def get_existing_preset_names(self):
+        names = set()
+        for index in range(self.preset_list.count()):
+            parsed = self.parse_preset_text(self.preset_list.item(index).text())
+            if parsed:
+                names.add(parsed[0].lower())
+        return names
+
+    def make_unique_preset_name(self, base_name):
+        existing = self.get_existing_preset_names()
+        candidate = base_name
+        suffix = 2
+        while candidate.lower() in existing:
+            candidate = f"{base_name}-{suffix}"
+            suffix += 1
+        return candidate
+
+    def update_preset_summary_label(self):
+        if not hasattr(self, 'preset_summary_label'):
+            return
+        selected_item = self.preset_list.currentItem()
+        if selected_item:
+            parsed = self.parse_preset_text(selected_item.text())
+            if parsed:
+                name, y_value, x_value, delay = parsed
+                self.preset_summary_label.setText(
+                    f"Selected: {name} | Y={y_value}, X={x_value}, Delay={delay}ms"
+                )
+                return
+        self.preset_summary_label.setText(
+            f"Current values: Y={self.recoil_slider.value()}, X={self.recoil_x_slider.value()}, Delay={self.delay_slider.value()}ms"
+        )
+
+    def filter_preset_list(self, text):
+        token = text.strip().lower()
+        for index in range(self.preset_list.count()):
+            item = self.preset_list.item(index)
+            item.setHidden(token not in item.text().lower())
 
     def save_preset(self):
-        name = self.preset_name_edit.text()
+        name = self.preset_name_edit.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Save Preset", "Preset name cannot be empty.")
+            return
+
         y_value = self.recoil_slider.value()
         x_value = self.recoil_x_slider.value()
         delay = self.delay_slider.value()
-        if name:
-            item = f'{name} - Y: {y_value} - X: {x_value} - Delay: {delay} ms'
+        item_text = self.format_preset_text(name, y_value, x_value, delay)
+
+        replaced = False
+        for index in range(self.preset_list.count()):
+            item = self.preset_list.item(index)
+            parsed = self.parse_preset_text(item.text())
+            if parsed and parsed[0].lower() == name.lower():
+                item.setText(item_text)
+                self.preset_list.setCurrentItem(item)
+                replaced = True
+                break
+        if not replaced:
+            item = QListWidgetItem(item_text)
             self.preset_list.addItem(item)
-            self.preset_name_edit.clear()
-            self.recoil_slider.setValue(0)
-            self.recoil_x_slider.setValue(0)
-            self.delay_slider.setValue(0)
-            self.update_slider_value(0)
-            self.update_x_slider_value(0)  # Update the X slider label
-            self.update_delay_value(0)
-            self.save_presets()
+            self.preset_list.setCurrentItem(item)
+
+        self.save_presets()
+        self.update_preset_summary_label()
+        self.update_runtime_summary()
 
     def load_preset(self):
         selected_item = self.preset_list.currentItem()
-        if selected_item:
-            text = selected_item.text()
-            parts = text.split(' - ')
-            if len(parts) == 4:
-                name = parts[0].strip()
-                y_value = int(parts[1].split(': ')[1])
-                x_value = int(parts[2].split(': ')[1])
-                delay = int(parts[3].split(': ')[1].split(' ms')[0])
-                self.preset_name_edit.setText(name)
-                self.recoil_slider.setValue(y_value)
-                self.recoil_x_slider.setValue(x_value)
-                self.delay_slider.setValue(delay)
-                self.update_slider_value(y_value)
-                self.update_x_slider_value(x_value)  # Update the X slider label
-                self.update_delay_value(delay)
+        if not selected_item:
+            return
+        parsed = self.parse_preset_text(selected_item.text())
+        if not parsed:
+            QMessageBox.warning(self, "Load Preset", "Selected preset has an invalid format.")
+            return
+
+        name, y_value, x_value, delay = parsed
+        self.preset_name_edit.setText(name)
+        self.recoil_slider.setValue(y_value)
+        self.recoil_x_slider.setValue(x_value)
+        self.delay_slider.setValue(max(1, delay))
+        self.update_slider_value(y_value)
+        self.update_x_slider_value(x_value)
+        self.update_delay_value(delay)
+        self.update_preset_summary_label()
 
     def delete_preset(self):
         selected_item = self.preset_list.currentItem()
         if selected_item:
             self.preset_list.takeItem(self.preset_list.row(selected_item))
             self.save_presets()
+            self.update_preset_summary_label()
+            self.update_runtime_summary()
+
+    def rename_preset(self):
+        selected_item = self.preset_list.currentItem()
+        new_name = self.preset_name_edit.text().strip()
+        if not selected_item or not new_name:
+            QMessageBox.warning(self, "Rename Preset", "Select a preset and set a new name first.")
+            return
+        parsed = self.parse_preset_text(selected_item.text())
+        if not parsed:
+            QMessageBox.warning(self, "Rename Preset", "Selected preset has an invalid format.")
+            return
+
+        _old_name, y_value, x_value, delay = parsed
+        selected_item.setText(self.format_preset_text(new_name, y_value, x_value, delay))
+        self.save_presets()
+        self.update_preset_summary_label()
+
+    def duplicate_preset(self):
+        selected_item = self.preset_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "Duplicate Preset", "Select a preset to duplicate.")
+            return
+
+        parsed = self.parse_preset_text(selected_item.text())
+        if not parsed:
+            QMessageBox.warning(self, "Duplicate Preset", "Selected preset has an invalid format.")
+            return
+
+        name, y_value, x_value, delay = parsed
+        duplicated_name = self.make_unique_preset_name(f"{name}-copy")
+        duplicated_item = QListWidgetItem(self.format_preset_text(duplicated_name, y_value, x_value, delay))
+        self.preset_list.addItem(duplicated_item)
+        self.preset_list.setCurrentItem(duplicated_item)
+        self.preset_name_edit.setText(duplicated_name)
+        self.save_presets()
+        self.update_preset_summary_label()
+        self.update_runtime_summary()
+
+    def export_presets(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export Presets", self.presets_file, "Text Files (*.txt)")
+        if not path:
+            return
+        presets = [self.preset_list.item(index).text() for index in range(self.preset_list.count())]
+        try:
+            with open(path, 'w') as file:
+                file.write('\n'.join(presets))
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Presets", f"Failed to export presets:\n{exc}")
+
+    def import_presets(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Presets", self.project_root, "Text Files (*.txt)")
+        if not path:
+            return
+
+        imported = 0
+        try:
+            with open(path, 'r') as file:
+                lines = file.read().splitlines()
+        except OSError as exc:
+            QMessageBox.critical(self, "Import Presets", f"Failed to import presets:\n{exc}")
+            return
+
+        existing_names = self.get_existing_preset_names()
+        for line in lines:
+            parsed = self.parse_preset_text(line)
+            if not parsed:
+                continue
+            name, y_value, x_value, delay = parsed
+            if name.lower() in existing_names:
+                name = self.make_unique_preset_name(name)
+            item = QListWidgetItem(self.format_preset_text(name, y_value, x_value, delay))
+            self.preset_list.addItem(item)
+            existing_names.add(name.lower())
+            imported += 1
+
+        if imported:
+            self.save_presets()
+            self.update_runtime_summary()
+        QMessageBox.information(self, "Import Presets", f"Imported {imported} preset(s).")
 
     def save_presets(self):
-        presets = []
-        for index in range(self.preset_list.count()):
-            item = self.preset_list.item(index)
-            presets.append(item.text())
-        with open('presets.txt', 'w') as file:
+        presets = [self.preset_list.item(index).text() for index in range(self.preset_list.count())]
+        with open(self.presets_file, 'w') as file:
             file.write('\n'.join(presets))
 
     def load_presets(self):
+        self.preset_list.clear()
         try:
-            with open('presets.txt', 'r') as file:
+            with open(self.presets_file, 'r') as file:
                 presets = file.read().splitlines()
-                self.preset_list.addItems(presets)
+            self.preset_list.addItems([line for line in presets if line.strip()])
         except FileNotFoundError:
             pass
+        self.filter_preset_list(self.preset_filter_input.text())
+        self.update_preset_summary_label()
+        self.update_runtime_summary()
+
+    def is_recoil_trigger_active(self):
+        mode = self.recoil_activation_mode
+        if mode == "left":
+            return self.is_mouse_pressed
+        if mode == "right":
+            return self.is_right_pressed
+        return self.is_mouse_pressed and self.is_right_pressed
+
+    def on_recoil_activation_changed(self, _index):
+        self.recoil_activation_mode = self.recoil_activation_combo.currentData()
+        self.update_recoil_runtime_label()
+        self.update_recoil_info_panel()
+
+    def update_recoil_runtime_label(self):
+        if not hasattr(self, 'recoil_state_label'):
+            return
+        if not self.recoil_checkbox.isChecked():
+            status = "Disabled"
+        elif self.isActiveWindow():
+            status = "Paused (window focused)"
+        elif self.is_recoil_trigger_active():
+            status = "Active trigger detected"
+        else:
+            status = "Waiting for trigger"
+        self.recoil_state_label.setText(status)
+        self.update_recoil_info_panel()
+
+    def update_recoil_info_panel(self):
+        if not hasattr(self, 'recoil_info_box'):
+            return
+        mode_map = {
+            "both": "LMB + RMB",
+            "left": "LMB only",
+            "right": "RMB only",
+        }
+        status = self.recoil_state_label.text() if hasattr(self, 'recoil_state_label') else "Unknown"
+        mode = mode_map.get(self.recoil_activation_mode, "LMB + RMB")
+        y_value = self.recoil_slider.value() if hasattr(self, 'recoil_slider') else 0
+        x_value = self.recoil_x_slider.value() if hasattr(self, 'recoil_x_slider') else 0
+        delay = self.delay_slider.value() if hasattr(self, 'delay_slider') else 1
+        lines = [
+            f"Status: {status}",
+            f"Activation: {mode}",
+            f"Y: {y_value} | X: {x_value} | Delay: {delay} ms",
+            "",
+            "Tips:",
+            "1) Start with low Y values and increase gradually.",
+            "2) Use X to correct horizontal drift.",
+            "3) Lower delay is stronger/faster compensation.",
+            "4) Recoil runs only while BASO window is unfocused.",
+        ]
+        self.recoil_info_box.setPlainText("\n".join(lines))
+
+    def apply_recoil_once(self):
+        if os.name != 'nt':
+            return
+        y_value = self.recoil_slider.value()
+        x_value = self.recoil_x_slider.value()
+        if y_value == 0 and x_value == 0:
+            return
+        ctypes.windll.user32.mouse_event(0x0001, x_value, y_value, 0, 0)
+
+    def reset_recoil_values(self):
+        self.recoil_slider.setValue(0)
+        self.recoil_x_slider.setValue(0)
+        self.delay_slider.setValue(1)
+        self.update_preset_summary_label()
+        self.update_recoil_info_panel()
+
+    def apply_window_flags(self, _state=None):
+        flags = Qt.FramelessWindowHint
+        if hasattr(self, 'always_on_top_checkbox'):
+            if self.always_on_top_checkbox.isChecked():
+                flags |= Qt.WindowStaysOnTopHint
+        else:
+            flags |= Qt.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.show()
+
+    def toggle_compact_mode(self, state):
+        if isinstance(state, bool):
+            enabled = state
+        elif isinstance(state, int):
+            enabled = state == Qt.Checked
+        else:
+            enabled = bool(state)
+        self.compact_mode = enabled
+        if enabled:
+            self.expanded_size = (max(self.width(), 760), max(self.height(), 520))
+            self.setFixedSize(*self.compact_size)
+        else:
+            self.setMinimumSize(760, 520)
+            self.setMaximumSize(16777215, 16777215)
+            self.resize(*self.expanded_size)
+
+    def open_project_folder(self):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(self.project_root))
+
+    def open_script_folder(self):
+        scripts_root = os.path.join(self.project_root, 'corel')
+        target = scripts_root if os.path.isdir(scripts_root) else self.project_root
+        QDesktopServices.openUrl(QUrl.fromLocalFile(target))
+
+    def clear_script_runtime_cache(self):
+        self.script_runtime_cache.clear()
+        self.append_script_output("Cleared script runtime cache.")
+        self.update_runtime_summary()
+
+    def clear_script_output(self):
+        self.script_output.clear()
+
+    def discover_script_files(self):
+        script_files = []
+        skip_dirs = {'.git', '__pycache__', 'target', 'ext'}
+        for root, dirs, files in os.walk(self.project_root):
+            dirs[:] = [name for name in dirs if name not in skip_dirs]
+            for name in files:
+                if not name.lower().endswith('.corel'):
+                    continue
+                abs_path = os.path.abspath(os.path.join(root, name))
+                if abs_path.endswith(os.path.join('corel', 'corel.corel')):
+                    continue
+                script_files.append(abs_path)
+        return sorted(script_files, key=lambda value: value.lower())
+
+    def refresh_script_library_list(self, _text=None):
+        if not hasattr(self, 'script_library_list'):
+            return
+
+        self.script_library_list.clear()
+        query = self.script_search_input.text().strip().lower()
+        all_scripts = self.discover_script_files()
+        visible = 0
+        for path in all_scripts:
+            relative = os.path.relpath(path, self.project_root)
+            searchable = f"{os.path.basename(path)} {relative}".lower()
+            if query and query not in searchable:
+                continue
+            item = QListWidgetItem(relative.replace('\\', '/'))
+            item.setData(Qt.UserRole, path)
+            self.script_library_list.addItem(item)
+            visible += 1
+
+        self.script_library_stats_label.setText(f"{visible} script(s)")
+        self.update_runtime_summary()
+
+    def open_script_from_library_item(self, item):
+        path = item.data(Qt.UserRole)
+        if not path:
+            return
+        try:
+            self.open_script_file(path, announce_sync=True)
+            self.script_subtabs.setCurrentIndex(0)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open Script", f"Failed to open script:\n{exc}")
+
+    def create_new_script(self):
+        default_dir = os.path.join(self.project_root, 'corel')
+        path, _ = QFileDialog.getSaveFileName(self, "Create Script", default_dir, "Corel Files (*.corel)")
+        if not path:
+            return
+        if not path.lower().endswith(".corel"):
+            path += ".corel"
+
+        if not os.path.exists(path):
+            template = "--<k>\n\n// New script\nwait 10ms\n"
+            with open(path, 'w') as file:
+                file.write(template)
+        self.open_script_file(path, announce_sync=True)
+        self.refresh_script_library_list()
+        self.script_subtabs.setCurrentIndex(0)
+
+    def update_runtime_summary(self):
+        if not hasattr(self, 'runtime_summary_label'):
+            return
+        presets_count = self.preset_list.count() if hasattr(self, 'preset_list') else 0
+        bindings_count = len(self.script_bindings)
+        cache_count = len(self.script_runtime_cache)
+        scripts_count = self.script_library_list.count() if hasattr(self, 'script_library_list') else 0
+        mode_label = "Compact" if self.compact_mode else "Expanded"
+        self.runtime_summary_label.setText(
+            f"Window: {mode_label} | Presets: {presets_count} | "
+            f"Bindings: {bindings_count} | Cached AST: {cache_count} | Scripts found: {scripts_count}"
+        )
     
     def on_global_click(self, x, y, button, pressed):
         if button == mouse.Button.left:
@@ -603,27 +1321,30 @@ class ModMenu(QMainWindow):
         elif button == mouse.Button.right:
             self.is_right_pressed = pressed
 
-        if self.is_mouse_pressed and self.is_right_pressed:
+        if self.is_recoil_trigger_active():
             self.start_recoil_signal.emit()
         else:
             self.stop_recoil_signal.emit()
 
     def start_recoil(self):
-        if self.recoil_checkbox.isChecked() and not self.isActiveWindow():
-            delay = self.delay_slider.value()
+        if self.recoil_checkbox.isChecked() and self.is_recoil_trigger_active() and not self.isActiveWindow():
+            delay = max(1, self.delay_slider.value())
             self.recoil_timer.start(delay)
+        self.update_recoil_runtime_label()
 
     def stop_recoil(self):
         self.recoil_timer.stop()
+        self.update_recoil_runtime_label()
 
     def toggle_recoil(self):
         if self.recoil_checkbox.isChecked():
             self.start_recoil()
         else:
             self.stop_recoil()
+        self.update_recoil_runtime_label()
 
     def apply_recoil(self):
-        if self.recoil_checkbox.isChecked() and self.is_mouse_pressed and not self.isActiveWindow():
+        if self.recoil_checkbox.isChecked() and self.is_recoil_trigger_active() and not self.isActiveWindow():
             y_value = self.recoil_slider.value()
             x_value = self.recoil_x_slider.value()
             if y_value > 0 or x_value != 0:
@@ -643,24 +1364,686 @@ class ModMenu(QMainWindow):
         if self.mouse_pressed:
             self.move(self.pos() + event.pos() - self.offset)
     
+    def normalize_hotkey(self, hotkey_text):
+        if not hotkey_text or not hotkey_text.strip():
+            raise ValueError("Hotkey cannot be empty.")
+
+        parts = [part.strip().lower() for part in hotkey_text.split('+') if part.strip()]
+        if not parts:
+            raise ValueError("Hotkey cannot be empty.")
+
+        modifier_aliases = {
+            'ctrl': '<ctrl>',
+            'control': '<ctrl>',
+            'alt': '<alt>',
+            'shift': '<shift>',
+            'cmd': '<cmd>',
+            'command': '<cmd>',
+            'win': '<cmd>',
+            'windows': '<cmd>',
+            'super': '<cmd>',
+            'meta': '<cmd>',
+        }
+        special_keys = {
+            'space': '<space>',
+            'enter': '<enter>',
+            'return': '<enter>',
+            'tab': '<tab>',
+            'esc': '<esc>',
+            'escape': '<esc>',
+            'up': '<up>',
+            'down': '<down>',
+            'left': '<left>',
+            'right': '<right>',
+            'delete': '<delete>',
+            'backspace': '<backspace>',
+        }
+        modifier_order = {'<ctrl>': 0, '<alt>': 1, '<shift>': 2, '<cmd>': 3}
+
+        modifiers = set()
+        key_token = None
+        for part in parts:
+            if part in modifier_aliases:
+                modifiers.add(modifier_aliases[part])
+                continue
+
+            if part.startswith('<') and part.endswith('>'):
+                candidate = part
+            elif part in special_keys:
+                candidate = special_keys[part]
+            elif part.startswith('f') and part[1:].isdigit():
+                number = int(part[1:])
+                if number < 1 or number > 24:
+                    raise ValueError("Function keys must be between F1 and F24.")
+                candidate = f'<f{number}>'
+            elif len(part) == 1:
+                candidate = part
+            else:
+                raise ValueError(f'Unsupported key token: "{part}".')
+
+            if key_token is not None:
+                raise ValueError("Use only one non-modifier key in a hotkey.")
+            key_token = candidate
+
+        if key_token is None:
+            raise ValueError("A hotkey must include at least one non-modifier key.")
+
+        ordered_modifiers = sorted(modifiers, key=lambda item: modifier_order.get(item, 99))
+        normalized = '+'.join(ordered_modifiers + [key_token])
+        try:
+            keyboard.HotKey.parse(normalized)
+        except Exception as exc:
+            raise ValueError(f'Invalid hotkey syntax: {exc}') from exc
+        return normalized
+
+    def extract_hotkey_from_script(self, script_path):
+        try:
+            with open(script_path, 'r') as file:
+                source = file.read()
+        except Exception as exc:
+            raise ValueError(f"Failed to read script: {exc}") from exc
+
+        match = re.search(r'^\s*--<([^>\r\n]+)>\s*$', source, flags=re.MULTILINE)
+        if not match:
+            raise ValueError('No trigger declaration found. Add one like --<k> at the top of the script.')
+
+        trigger = match.group(1).strip()
+        if not trigger:
+            raise ValueError('Trigger declaration is empty. Use --<k> or --<ctrl+alt+k>.')
+        return trigger
+
+    def refresh_script_bindings_list(self):
+        self.script_binding_list.clear()
+        for hotkey in sorted(self.script_bindings.keys()):
+            script_path = self.script_bindings[hotkey]
+            item = QListWidgetItem(f"{hotkey} -> {script_path}")
+            item.setData(Qt.UserRole, hotkey)
+            self.script_binding_list.addItem(item)
+        self.update_runtime_summary()
+
+    def save_script_bindings(self):
+        try:
+            with open(self.script_bindings_file, 'w') as file:
+                json.dump(self.script_bindings, file, indent=2)
+        except Exception as exc:
+            self.append_script_output(f"Failed to save script bindings: {exc}")
+
+    def load_script_bindings(self):
+        self.script_bindings = {}
+        if os.path.exists(self.script_bindings_file):
+            try:
+                with open(self.script_bindings_file, 'r') as file:
+                    loaded = json.load(file)
+                if isinstance(loaded, dict):
+                    for hotkey, script_path in loaded.items():
+                        if isinstance(hotkey, str) and isinstance(script_path, str):
+                            self.script_bindings[hotkey] = script_path
+            except Exception as exc:
+                self.append_script_output(f"Failed to load script bindings: {exc}")
+
+        self.refresh_script_bindings_list()
+        self.restart_hotkey_listener()
+        self.prewarm_script_runtime_cache_async()
+        self.update_runtime_summary()
+
+    def create_hotkey_callback(self, script_path, hotkey):
+        def callback():
+            self.run_script_signal.emit(script_path, hotkey)
+        return callback
+
+    def restart_hotkey_listener(self):
+        if self.hotkey_listener is not None:
+            try:
+                self.hotkey_listener.stop()
+            except Exception:
+                pass
+            self.hotkey_listener = None
+
+        if not self.script_bindings:
+            self.update_runtime_summary()
+            return
+
+        valid_bindings = {}
+        removed_bindings = []
+        for hotkey, script_path in self.script_bindings.items():
+            if os.path.exists(script_path):
+                valid_bindings[hotkey] = script_path
+            else:
+                removed_bindings.append((hotkey, script_path))
+
+        if removed_bindings:
+            self.script_bindings = valid_bindings
+            self.save_script_bindings()
+            self.refresh_script_bindings_list()
+            for hotkey, script_path in removed_bindings:
+                self.append_script_output(f"Removed missing script binding {hotkey}: {script_path}")
+
+        if not valid_bindings:
+            self.update_runtime_summary()
+            return
+
+        callbacks = {}
+        for hotkey, script_path in valid_bindings.items():
+            callbacks[hotkey] = self.create_hotkey_callback(script_path, hotkey)
+
+        try:
+            self.hotkey_listener = keyboard.GlobalHotKeys(callbacks)
+            self.hotkey_listener.start()
+        except Exception as exc:
+            self.hotkey_listener = None
+            self.append_script_output(f"Failed to start hotkey listener: {exc}")
+        self.update_runtime_summary()
+
+    def bind_loaded_script_hotkey(self):
+        hotkey_text = self.hotkey_input.text().strip()
+
+        if not self.current_script_path:
+            self.current_script_path, _ = QFileDialog.getSaveFileName(self, "Save Script", "", "Corel Files (*.corel)")
+            if not self.current_script_path:
+                return
+
+        self.save_script()
+        self.add_or_update_script_binding(self.current_script_path, hotkey_text or None)
+
+    def bind_script_file_hotkey(self):
+        hotkey_text = self.hotkey_input.text().strip()
+
+        script_path, _ = QFileDialog.getOpenFileName(self, "Select Script", "", "Corel Files (*.corel)")
+        if not script_path:
+            return
+        self.add_or_update_script_binding(script_path, hotkey_text or None)
+
+    def add_or_update_script_binding(self, script_path, hotkey_text=None):
+        if not os.path.exists(script_path):
+            QMessageBox.warning(self, "Bind Hotkey", f"Script file not found:\n{script_path}")
+            return
+
+        source_label = "manual input"
+        if hotkey_text is None:
+            try:
+                hotkey_text = self.extract_hotkey_from_script(script_path)
+                source_label = "script trigger"
+            except ValueError as exc:
+                QMessageBox.warning(self, "Bind Hotkey", str(exc))
+                return
+
+        try:
+            normalized_hotkey = self.normalize_hotkey(hotkey_text)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Bind Hotkey", str(exc))
+            return
+
+        abs_script_path = os.path.abspath(script_path)
+
+        # A script can have only one binding: remove previous hotkeys pointing to this script.
+        for existing_hotkey, existing_script in list(self.script_bindings.items()):
+            if existing_hotkey != normalized_hotkey and os.path.abspath(existing_script) == abs_script_path:
+                del self.script_bindings[existing_hotkey]
+
+        previous_path = self.script_bindings.get(normalized_hotkey)
+        if previous_path and os.path.abspath(previous_path) != abs_script_path:
+            answer = QMessageBox.question(
+                self,
+                "Bind Hotkey",
+                f'{normalized_hotkey} is already bound to:\n{previous_path}\n\nReplace it?',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        self.script_bindings[normalized_hotkey] = abs_script_path
+        self.save_script_bindings()
+        self.refresh_script_bindings_list()
+        self.restart_hotkey_listener()
+        self.append_script_output(f"Bound {normalized_hotkey} to {abs_script_path} ({source_label})")
+        self.prime_script_runtime_cache(abs_script_path, announce=False)
+        self.hotkey_input.clear()
+        self.update_runtime_summary()
+
+    def sync_script_binding_from_script(self, script_path, announce_changes=True):
+        abs_script_path = os.path.abspath(script_path)
+
+        existing_for_script = [
+            hotkey for hotkey, existing_script in self.script_bindings.items()
+            if os.path.abspath(existing_script) == abs_script_path
+        ]
+
+        trigger_text = None
+        normalized_hotkey = None
+        parsing_error = None
+        try:
+            trigger_text = self.extract_hotkey_from_script(abs_script_path)
+            normalized_hotkey = self.normalize_hotkey(trigger_text)
+        except ValueError as exc:
+            parsing_error = str(exc)
+
+        changed = False
+        for hotkey in existing_for_script:
+            del self.script_bindings[hotkey]
+            changed = True
+
+        if normalized_hotkey is None:
+            if changed:
+                self.save_script_bindings()
+                self.refresh_script_bindings_list()
+                self.restart_hotkey_listener()
+                if announce_changes:
+                    self.append_script_output(f"Removed bindings for {abs_script_path} (no valid --<...> trigger).")
+                self.update_runtime_summary()
+            elif parsing_error and announce_changes:
+                self.append_script_output(parsing_error)
+            return
+
+        conflict_path = self.script_bindings.get(normalized_hotkey)
+        if conflict_path and os.path.abspath(conflict_path) != abs_script_path:
+            if changed:
+                self.save_script_bindings()
+                self.refresh_script_bindings_list()
+                self.restart_hotkey_listener()
+                self.update_runtime_summary()
+            if announce_changes:
+                self.append_script_output(
+                    f"Hotkey {normalized_hotkey} from script {abs_script_path} conflicts with {conflict_path}. "
+                    "Keeping existing binding."
+                )
+            return
+
+        if self.script_bindings.get(normalized_hotkey) != abs_script_path:
+            self.script_bindings[normalized_hotkey] = abs_script_path
+            changed = True
+
+        if changed:
+            self.save_script_bindings()
+            self.refresh_script_bindings_list()
+            self.restart_hotkey_listener()
+            if announce_changes:
+                self.append_script_output(
+                    f"Synced script trigger {normalized_hotkey} from {abs_script_path}."
+                )
+            self.update_runtime_summary()
+
+    def get_corel_runtime_module(self):
+        if self.corel_runtime_module is not None:
+            return self.corel_runtime_module
+
+        runtime_path = os.path.join(self.project_root, 'corel', 'corel_interpreter.py')
+        if not os.path.exists(runtime_path):
+            raise RuntimeError(f"Corel interpreter not found: {runtime_path}")
+
+        spec = importlib.util.spec_from_file_location("corel_runtime", runtime_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Failed to load corel_interpreter module.")
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.corel_runtime_module = module
+        return module
+
+    def ensure_corel_executable(self):
+        corel_dir = os.path.join(self.project_root, 'corel')
+        corel_exe = os.path.join(corel_dir, 'target', 'debug', 'corel.exe')
+        if os.path.exists(corel_exe):
+            return corel_exe
+
+        result = subprocess.run(
+            ["cargo", "build"],
+            cwd=corel_dir,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            details = stderr or stdout or "unknown cargo build error"
+            raise RuntimeError(f"Failed to build corel.exe: {details}")
+
+        if not os.path.exists(corel_exe):
+            raise RuntimeError(f"corel.exe not found after build: {corel_exe}")
+
+        return corel_exe
+
+    def compile_script_ast(self, script_path):
+        runtime = self.get_corel_runtime_module()
+        corel_dir = os.path.join(self.project_root, 'corel')
+        corel_input = os.path.join(corel_dir, 'corel.corel')
+        ast_path = os.path.join(corel_dir, 'ast.json')
+        corel_exe = self.ensure_corel_executable()
+
+        shutil.copyfile(script_path, corel_input)
+        parse_result = subprocess.run(
+            [corel_exe],
+            cwd=corel_dir,
+            capture_output=True,
+            text=True
+        )
+        if parse_result.returncode != 0:
+            stderr = parse_result.stderr.strip()
+            stdout = parse_result.stdout.strip()
+            details = stderr or stdout or "unknown parser error"
+            raise RuntimeError(f"Corel parser failed: {details}")
+
+        if not os.path.exists(ast_path):
+            raise RuntimeError(f"AST file not generated: {ast_path}")
+
+        with open(ast_path, 'r') as file:
+            json_data = json.load(file)
+
+        return runtime.build_ast_from_json(json_data)
+
+    def get_cached_script_ast(self, script_path):
+        abs_script_path = os.path.abspath(script_path)
+        mtime = os.path.getmtime(abs_script_path)
+        cache_entry = self.script_runtime_cache.get(abs_script_path)
+        if cache_entry and cache_entry.get('mtime') == mtime and cache_entry.get('ast') is not None:
+            return cache_entry['ast']
+
+        ast = self.compile_script_ast(abs_script_path)
+        self.script_runtime_cache[abs_script_path] = {
+            'mtime': mtime,
+            'ast': ast
+        }
+        self.update_runtime_summary()
+        return ast
+
+    def prime_script_runtime_cache(self, script_path, announce=False):
+        try:
+            self.get_cached_script_ast(script_path)
+            if announce:
+                self.append_script_output(f"Prepared runtime cache for {os.path.abspath(script_path)}")
+        except Exception as exc:
+            if announce:
+                self.append_script_output(f"Could not prepare runtime cache: {exc}")
+
+    def prewarm_script_runtime_cache_async(self):
+        scripts = [path for path in self.script_bindings.values() if os.path.exists(path)]
+        if not scripts:
+            return
+
+        def worker():
+            for path in scripts:
+                self.prime_script_runtime_cache(path, announce=False)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+    def execute_script_inprocess_thread(self, script_path, ast_nodes):
+        success = True
+        message = "Script finished successfully."
+        try:
+            runtime = self.get_corel_runtime_module()
+            interpreter = runtime.CorelInterpreter(ast_nodes)
+            interpreter.run()
+        except Exception as exc:
+            success = False
+            message = f"Script finished with errors: {exc}"
+        self.inprocess_finished_signal.emit(success, message)
+
+    def on_inprocess_script_finished(self, success, message):
+        with self.script_state_lock:
+            self.script_running_inprocess = False
+        self.append_script_output(message)
+        self.run_script_button.setEnabled(True)
+        self.update_runtime_summary()
+
+    def remove_selected_script_binding(self):
+        selected_item = self.script_binding_list.currentItem()
+        if not selected_item:
+            return
+
+        hotkey = selected_item.data(Qt.UserRole)
+        script_path = self.script_bindings.get(hotkey, "")
+        answer = QMessageBox.question(
+            self,
+            "Remove Binding",
+            f"Remove this binding?\n{hotkey} -> {script_path}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        if hotkey in self.script_bindings:
+            del self.script_bindings[hotkey]
+            self.save_script_bindings()
+            self.refresh_script_bindings_list()
+            self.restart_hotkey_listener()
+            self.append_script_output(f"Removed binding {hotkey}")
+            self.update_runtime_summary()
+
+    def update_current_script_label(self):
+        if self.current_script_path:
+            abs_path = os.path.abspath(self.current_script_path)
+            self.current_script_label.setText(f"Current file: {os.path.basename(abs_path)}")
+            self.current_script_label.setToolTip(abs_path)
+        else:
+            self.current_script_label.setText("Current file: (none)")
+            self.current_script_label.setToolTip("")
+
+    def open_script_file(self, path, announce_sync=True):
+        abs_path = os.path.abspath(path)
+        with open(abs_path, 'r') as file:
+            self.script_editor.setPlainText(file.read())
+        self.current_script_path = abs_path
+        self.update_current_script_label()
+        self.sync_script_binding_from_script(abs_path, announce_changes=announce_sync)
+        self.prime_script_runtime_cache(abs_path, announce=False)
+        self.refresh_script_library_list()
+
+    def open_script_from_binding_item(self, item):
+        hotkey = item.data(Qt.UserRole)
+        script_path = self.script_bindings.get(hotkey)
+        if not script_path:
+            return
+        if not os.path.exists(script_path):
+            self.append_script_output(f"Bound script no longer exists: {script_path}")
+            self.restart_hotkey_listener()
+            return
+
+        try:
+            self.open_script_file(script_path, announce_sync=False)
+            self.script_subtabs.setCurrentIndex(0)
+            self.append_script_output(f"Opened bound script: {script_path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Open Script", f"Failed to open bound script:\n{exc}")
+
     def save_script(self):
-        if not hasattr(self, 'current_script_path') or self.current_script_path is None:
+        if not self.current_script_path:
             self.current_script_path, _ = QFileDialog.getSaveFileName(self, "Save Script", "", "Corel Files (*.corel)")
 
         if self.current_script_path:
             with open(self.current_script_path, 'w') as file:
                 file.write(self.script_editor.toPlainText())
+            self.update_current_script_label()
+            self.sync_script_binding_from_script(self.current_script_path, announce_changes=False)
+            self.prime_script_runtime_cache(self.current_script_path, announce=False)
+            self.refresh_script_library_list()
 
     def load_script(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open Script", "", "Corel Files (*.corel)")
+        path, _ = QFileDialog.getOpenFileName(self, "Open Script", self.project_root, "Corel Files (*.corel)")
         if path:
-            with open(path, 'r') as file:
-                self.script_editor.setPlainText(file.read())
-            self.current_script_path = path
+            self.open_script_file(path, announce_sync=True)
 
     def delete_script(self):
-        # TODO: Implement this. I'm thinking about deleting this, as you could just use the OS to delete the file.
-        pass
+        path = self.current_script_path
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Delete Script", "", "Corel Files (*.corel)")
+            if not path:
+                return
+
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Delete Script", f"File not found:\n{path}")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Delete Script",
+            f"Delete this script?\n{path}",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        try:
+            os.remove(path)
+            abs_path = os.path.abspath(path)
+            if abs_path in self.script_runtime_cache:
+                del self.script_runtime_cache[abs_path]
+            if os.path.abspath(path) == os.path.abspath(self.current_script_path or ""):
+                self.current_script_path = None
+                self.script_editor.clear()
+            self.update_current_script_label()
+            self.append_script_output(f"Deleted script: {path}")
+            self.refresh_script_library_list()
+            self.update_runtime_summary()
+        except OSError as exc:
+            QMessageBox.critical(self, "Delete Script", f"Failed to delete script:\n{exc}")
+
+    def append_script_output(self, text):
+        if not text:
+            return
+        self.script_output.moveCursor(QTextCursor.End)
+        self.script_output.insertPlainText(text)
+        if not text.endswith('\n'):
+            self.script_output.insertPlainText('\n')
+        self.script_output.moveCursor(QTextCursor.End)
+
+    def read_script_stdout(self):
+        if self.corel_process is None:
+            return
+        output = bytes(self.corel_process.readAllStandardOutput()).decode('utf-8', errors='replace')
+        self.append_script_output(output)
+
+    def read_script_stderr(self):
+        if self.corel_process is None:
+            return
+        output = bytes(self.corel_process.readAllStandardError()).decode('utf-8', errors='replace')
+        self.append_script_output(output)
+
+    def on_script_finished(self, exit_code, _exit_status):
+        if exit_code == 0:
+            self.append_script_output("Script finished successfully.")
+        else:
+            self.append_script_output(f"Script finished with errors. Exit code: {exit_code}")
+        self.run_script_button.setEnabled(True)
+        self.update_runtime_summary()
+
+    def run_script_clicked(self):
+        auto_save = self.auto_save_on_run_checkbox.isChecked() if hasattr(self, 'auto_save_on_run_checkbox') else True
+        self.run_script(save_current=auto_save, trigger_source="manual")
+
+    def run_script_from_hotkey(self, script_path, hotkey):
+        self.run_script(script_path=script_path, save_current=False, trigger_source=f"hotkey {hotkey}")
+
+    def run_script(self, script_path=None, save_current=True, trigger_source="manual"):
+        if os.name != 'nt':
+            self.append_script_output("Running Corel scripts is currently supported only on Windows.")
+            return
+
+        with self.script_state_lock:
+            if self.script_running_inprocess:
+                self.append_script_output("A script is already running.")
+                return
+
+        if self.corel_process and self.corel_process.state() != QProcess.NotRunning:
+            self.append_script_output("A script is already running.")
+            return
+
+        if script_path is None:
+            if not self.current_script_path:
+                self.current_script_path, _ = QFileDialog.getSaveFileName(
+                    self, "Save Script Before Running", "", "Corel Files (*.corel)"
+                )
+                if not self.current_script_path:
+                    return
+
+            if save_current:
+                self.save_script()
+            script_path = os.path.abspath(self.current_script_path)
+        else:
+            script_path = os.path.abspath(script_path)
+            if save_current and self.current_script_path and os.path.abspath(self.current_script_path) == script_path:
+                self.save_script()
+
+        if not os.path.exists(script_path):
+            self.append_script_output(f"Script file not found: {script_path}")
+            return
+
+        clear_before_run = self.clear_output_before_run_checkbox.isChecked() if hasattr(self, 'clear_output_before_run_checkbox') else True
+
+        # Fast path: run precompiled AST in-process (avoids per-trigger process startup).
+        try:
+            ast_nodes = self.get_cached_script_ast(script_path)
+            if clear_before_run:
+                self.script_output.clear()
+            self.append_script_output(f"Trigger: {trigger_source}")
+            self.append_script_output(f"Running script: {script_path}")
+            self.run_script_button.setEnabled(False)
+            with self.script_state_lock:
+                self.script_running_inprocess = True
+            worker = threading.Thread(
+                target=self.execute_script_inprocess_thread,
+                args=(script_path, ast_nodes),
+                daemon=True
+            )
+            worker.start()
+            return
+        except Exception as exc:
+            self.append_script_output(f"In-process runtime unavailable, using runner fallback: {exc}")
+
+        corel_dir = os.path.join(self.project_root, 'corel')
+        runner = os.path.join(corel_dir, 'corel.bat')
+        if not os.path.exists(runner):
+            self.append_script_output(f"Runner not found: {runner}")
+            return
+
+        if clear_before_run:
+            self.script_output.clear()
+        self.append_script_output(f"Trigger: {trigger_source}")
+        self.append_script_output(f"Running script: {script_path}")
+        self.append_script_output("Please wait...")
+
+        if self.corel_process:
+            self.corel_process.deleteLater()
+
+        self.corel_process = QProcess(self)
+        self.corel_process.setWorkingDirectory(corel_dir)
+        self.corel_process.readyReadStandardOutput.connect(self.read_script_stdout)
+        self.corel_process.readyReadStandardError.connect(self.read_script_stderr)
+        self.corel_process.finished.connect(self.on_script_finished)
+
+        self.run_script_button.setEnabled(False)
+        self.corel_process.start("cmd.exe", ["/c", runner, script_path])
+        if not self.corel_process.waitForStarted(3000):
+            self.append_script_output("Failed to start script runner process.")
+            self.run_script_button.setEnabled(True)
+
+    def closeEvent(self, event):
+        if hasattr(self, 'ui_stats_timer') and self.ui_stats_timer is not None:
+            self.ui_stats_timer.stop()
+
+        try:
+            if hasattr(self, 'listener') and self.listener is not None:
+                self.listener.stop()
+        except Exception:
+            pass
+
+        try:
+            if self.hotkey_listener is not None:
+                self.hotkey_listener.stop()
+                self.hotkey_listener = None
+        except Exception:
+            pass
+
+        if self.corel_process and self.corel_process.state() != QProcess.NotRunning:
+            self.corel_process.kill()
+            self.corel_process.waitForFinished(1000)
+
+        with self.script_state_lock:
+            self.script_running_inprocess = False
+
+        event.accept()
 
 
 if __name__ == '__main__':

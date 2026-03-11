@@ -121,9 +121,24 @@ impl Default for CorelParser {
     }
 }
 impl CorelParser {
+    fn current_token(&self) -> Option<corel_lexer::Token> {
+        self.tokens.get(self.current_position as usize).cloned()
+    }
+
+    fn fail_and_advance(&mut self, message: String) {
+        eprintln!("{message}");
+        self.current_position += 1;
+    }
+
+    fn unexpected_eof(&mut self, context: &str) {
+        eprintln!("Error: Unexpected end of input while parsing {context}");
+        self.current_position = self.tokens.len() as i32;
+    }
+
     pub fn parse_line(&mut self) {
-        // We gotta clone because of borrow checker 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            return;
+        };
         let token_type = token.r#type.clone();
 
         // Checking the token and parsing it
@@ -135,14 +150,26 @@ impl CorelParser {
             "LOOP" => self.parse_loop(),
             "MOVE" => self.parse_move(),
             "COMMENT" => self.current_position += 1, // Skip the COMMENT token
-            _ => println!("Error: Invalid token type: {} at line: {}. Current ", token_type, token.line_number),
+            _ => self.fail_and_advance(format!(
+                "Error: Invalid token type: {} at line: {}",
+                token_type, token.line_number
+            )),
         }
     }
 
     pub fn parse(&mut self) -> Vec<ASTnode> {
         while self.current_position < self.tokens.len() as i32 {
+            let previous_position = self.current_position;
             self.parse_line();
-            // println!("Current position: {}", self.current_position);
+
+            // Last-resort recovery: never allow the parser to stall in place.
+            if self.current_position <= previous_position {
+                eprintln!(
+                    "Error: Parser stalled at token index {}, forcing recovery",
+                    self.current_position
+                );
+                self.current_position += 1;
+            }
         }
         // Before returning the AST, we will pass it to a JSON file
         // so that we can use it in the interpreter
@@ -157,18 +184,24 @@ impl CorelParser {
 
     fn parse_wait(&mut self) {
         self.current_position += 1; // Skip the WAIT token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("wait");
+            return;
+        };
 
         // Checking for correct syntax (wait(5s, 10ms, 15ds, 20cs))
         if token.r#type != "LPAREN" {
-            println!("Error: Expected LPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LPAREN token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("wait");
+            return;
+        };
 
         if token.r#type != "TIME" {
-            println!("Error: Expected TIME at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected TIME at line: {}", token.line_number));
             return;
         }
 
@@ -180,16 +213,22 @@ impl CorelParser {
         let value = match value_str.parse::<i32>() {
             Ok(value) => value,
             Err(_) => {
-                println!("Error: Invalid number in TIME at line: {}", token.line_number);
+                self.fail_and_advance(format!(
+                    "Error: Invalid number in TIME at line: {}",
+                    token.line_number
+                ));
                 return;
             }
         };
 
         self.current_position += 1; // Skip the TIME token
 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("wait");
+            return;
+        };
         if token.r#type != "RPAREN" {
-            println!("Error: Expected RPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected RPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the RPAREN token
@@ -203,26 +242,35 @@ impl CorelParser {
 
     fn parse_press(&mut self) {
         self.current_position += 1; // Skip the PRESS token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("press");
+            return;
+        };
 
         // Checking for correct syntax (press("a"))
         if token.r#type != "LPAREN" {
-            println!("Error: Expected LPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LPAREN token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("press");
+            return;
+        };
 
         if token.r#type != "STRING" {
-            println!("Error: Expected STRING at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected STRING at line: {}", token.line_number));
             return;
         }
         let value = token.value.clone();
         self.current_position += 1; // Skip the STRING token
 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("press");
+            return;
+        };
         if token.r#type != "RPAREN" {
-            println!("Error: Expected RPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected RPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the RPAREN token
@@ -235,26 +283,35 @@ impl CorelParser {
 
     fn parse_click(&mut self) {
         self.current_position += 1; // Skip the CLICK token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("click");
+            return;
+        };
 
         // Checking for correct syntax (click("a"))
         if token.r#type != "LPAREN" {
-            println!("Error: Expected LPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LPAREN token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("click");
+            return;
+        };
 
         if token.r#type != "STRING" {
-            println!("Error: Expected STRING at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected STRING at line: {}", token.line_number));
             return;
         }
         let value = token.value.clone();
         self.current_position += 1; // Skip the STRING token
 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("click");
+            return;
+        };
         if token.r#type != "RPAREN" {
-            println!("Error: Expected RPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected RPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the RPAREN token
@@ -267,46 +324,80 @@ impl CorelParser {
 
     fn parse_loop(&mut self) {
         self.current_position += 1; // Skip the LOOP token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("loop");
+            return;
+        };
 
         // Checking for correct syntax (loop(5))
         if token.r#type != "LPAREN" {
-            println!("Error: Expected LPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LPAREN token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("loop");
+            return;
+        };
 
         if token.r#type != "NUMBER" {
-            println!("Error: Expected NUMBER at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected NUMBER at line: {}", token.line_number));
             return;
         }
-        let value = token.value.parse::<i32>().unwrap();
+        let value = match token.value.parse::<i32>() {
+            Ok(value) => value,
+            Err(_) => {
+                self.fail_and_advance(format!(
+                    "Error: Invalid loop count at line: {}",
+                    token.line_number
+                ));
+                return;
+            }
+        };
         self.current_position += 1; // Skip the NUMBER token
 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("loop");
+            return;
+        };
         if token.r#type != "RPAREN" {
-            println!("Error: Expected RPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected RPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the RPAREN token
 
         // Parsing loops's children 
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("loop");
+            return;
+        };
         if token.r#type != "LBRACE" {
-            println!("Error: Expected LBRACE at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LBRACE at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LBRACE token
 
         let mut children: Vec<ASTnode> = Vec::new();
         while self.current_position < self.tokens.len() as i32 {
-            let token = self.tokens[self.current_position as usize].clone();
+            let Some(token) = self.current_token() else {
+                self.unexpected_eof("loop");
+                return;
+            };
             if token.r#type == "RBRACE" {
                 break;
             }
+            let previous_len = self.nodes.len();
             self.parse_line();
-            children.push(self.nodes.pop().unwrap());
+            if self.nodes.len() > previous_len {
+                if let Some(node) = self.nodes.pop() {
+                    children.push(node);
+                }
+            }
+        }
+
+        if self.current_position >= self.tokens.len() as i32 {
+            self.unexpected_eof("loop body");
+            return;
         }
         self.current_position += 1; // Skip the RBRACE token
 
@@ -318,19 +409,28 @@ impl CorelParser {
 
     fn parse_move(&mut self) {
         self.current_position += 1; // Skip the MOVE token
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("move");
+            return;
+        };
 
         // Checking for correct syntax (move(100x) or move(100y))
         if token.r#type != "LPAREN" {
-            println!("Error: Expected LPAREN at line: {}", token.line_number);
+            self.fail_and_advance(format!("Error: Expected LPAREN at line: {}", token.line_number));
             return;
         }
         self.current_position += 1; // Skip the LPAREN token
     
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("move");
+            return;
+        };
         match token.r#type.as_str() {
             "NUMBER" => {
-                println!("Error: Expected COORDINATE at line: {}", token.line_number);
+                self.fail_and_advance(format!(
+                    "Error: Expected COORDINATE at line: {}",
+                    token.line_number
+                ));
                 return;
             },
             "COORDINATE" => {
@@ -338,15 +438,24 @@ impl CorelParser {
                 let value = match value_str.parse::<i32>() {
                     Ok(value) => value,
                     Err(_) => {
-                        println!("Error: Invalid coordinate value at line: {}", token.line_number);
+                        self.fail_and_advance(format!(
+                            "Error: Invalid coordinate value at line: {}",
+                            token.line_number
+                        ));
                         return;
                     }
                 };
                 self.current_position += 1; // Skip the COORDINATE token
 
-                let token = self.tokens[self.current_position as usize].clone();
+                let Some(token) = self.current_token() else {
+                    self.unexpected_eof("move");
+                    return;
+                };
                 if token.r#type != "RPAREN" {
-                    println!("Error: Expected RPAREN at line: {}", token.line_number);
+                    self.fail_and_advance(format!(
+                        "Error: Expected RPAREN at line: {}",
+                        token.line_number
+                    ));
                     return;
                 }
                 self.current_position += 1; // Skip the RPAREN token
@@ -358,13 +467,19 @@ impl CorelParser {
                 self.nodes.push(ast_node);
             },
             _ => {
-                println!("Error: Invalid token type: {} at line: {}", token.r#type, token.line_number);
+                self.fail_and_advance(format!(
+                    "Error: Invalid token type: {} at line: {}",
+                    token.r#type, token.line_number
+                ));
             }
         }    
     }
 
     fn parse_key(&mut self) {
-        let token = self.tokens[self.current_position as usize].clone();
+        let Some(token) = self.current_token() else {
+            self.unexpected_eof("start key");
+            return;
+        };
 
         // Adding the KEY node to the AST
         let key_node = Box::new(KEYnode::new(token.value.clone()));

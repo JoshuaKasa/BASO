@@ -3,4 +3,5 @@
 wait(1ms)
 loop (10) {
     press('m')
+    wait(1s)
 }

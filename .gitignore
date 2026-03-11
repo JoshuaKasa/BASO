@@ -1,2 +1,11 @@
 Makefile
 Makefile*
+__pycache__/
+*.pyc
+dist/
+corel/target/
+corel/ast.json
+corel/corel.corel
+theme_preferences.json
+presets.txt
+script_bindings.json

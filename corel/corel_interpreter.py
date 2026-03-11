@@ -3,12 +3,13 @@ import time
 import sys
 import json
 import ctypes
+import builtins
 import pyautogui
 
 # Modifying print to flush immediately
 # Taken from: https://stackoverflow.com/questions/230751/how-to-flush-output-of-python-print
 def print(*objects, sep=' ', end='\n', file=sys.stdout, flush=True):
-    __builtins__.print(*objects, sep=sep, end=end, file=file, flush=flush)
+    builtins.print(*objects, sep=sep, end=end, file=file, flush=flush)
 
 # Function for moving the mouse at the OS level as pyautogui doesn't work
 MOUSEEVENTF_MOVE = 0x0001 # This constant is taken from the Windows API
@@ -105,6 +106,8 @@ class CorelInterpreter:
             self.execute_WAIT(node)
         elif isinstance(node, PRESSnode):
             self.execute_PRESS(node)
+        elif isinstance(node, KEYnode):
+            self.execute_KEY(node)
         elif isinstance(node, MOVEnode):
             self.execute_MOVE(node)
         elif isinstance(node, CLICKnode):
@@ -138,6 +141,10 @@ class CorelInterpreter:
             pyautogui.press(node.value)
         else:
             raise Exception(f'Invalid key: {node.value}\nValid keys: {pyautogui.KEYBOARD_KEYS}')
+
+    def execute_KEY(self, node):
+        # Trigger keys are metadata for tooling; runtime execution ignores them.
+        print(f'Using trigger key declaration: {node.value}')
     
     def execute_MOVE(self, node):
         print(f'Moving {node.value} {node.direction}...')

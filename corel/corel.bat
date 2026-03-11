@@ -18,8 +18,14 @@ IF "%~1"=="" (
 )
 
 REM Set variables
-SET input_file=%current_dir%\%~1
+SET input_arg=%~1
+IF "%~d1"=="" (
+    SET input_file=%current_dir%\%input_arg%
+) ELSE (
+    SET input_file=%input_arg%
+)
 SET output_file=corel.corel
+SET corel_exe=target\debug\corel.exe
 
 REM Check if input file exists
 IF NOT EXIST "%input_file%" (
@@ -34,24 +40,31 @@ IF NOT %ERRORLEVEL% == 0 (
     exit /b 1
 )
 
-REM Check if cargo is available
-cargo --version > NUL
-IF NOT %ERRORLEVEL% == 0 (
-    echo Cargo is not installed or not in PATH.
+REM Build Corel only if the executable doesn't exist yet
+IF NOT EXIST "%corel_exe%" (
+    cargo --version > NUL 2>&1
+    IF NOT %ERRORLEVEL% == 0 (
+        echo Cargo is not installed or not in PATH.
+        exit /b 1
+    )
+
+    echo Building Corel runtime...
+    cargo build > NUL 2>&1
+    IF NOT %ERRORLEVEL% == 0 (
+        echo Cargo build failed.
+        exit /b 1
+    )
+)
+
+IF NOT EXIST "%corel_exe%" (
+    echo Corel executable not found: %corel_exe%
     exit /b 1
 )
 
-REM Run cargo build and suppress all output
-cargo build > NUL 2>&1
+REM Run the prebuilt parser executable
+"%corel_exe%"
 IF NOT %ERRORLEVEL% == 0 (
-    echo Cargo build failed.
-    exit /b 1
-)
-
-REM Run cargo run and suppress all output
-cargo run
-IF NOT %ERRORLEVEL% == 0 (
-    echo Cargo run failed.
+    echo Corel parser failed.
     exit /b 1
 )
 
@@ -69,5 +82,4 @@ IF NOT %ERRORLEVEL% == 0 (
     exit /b 1
 )
 
-echo Script executed successfully.
 exit /b 0
