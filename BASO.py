@@ -11,17 +11,129 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout, QPushButton, QListWidget,
     QListWidgetItem, QLineEdit, QLabel, QCheckBox, QSlider, QPlainTextEdit, QHBoxLayout,
     QCompleter, QFileDialog, QComboBox, QColorDialog, QMessageBox, QGroupBox, QFormLayout,
-    QSplitter
+    QSplitter, QShortcut, QTextEdit
 )
-from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp, QProcess, QUrl
-from PyQt5.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont, QTextCursor, QDesktopServices
+from PyQt5.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRegExp, QProcess, QUrl, QRect, QSize
+from PyQt5.QtGui import (
+    QSyntaxHighlighter, QTextCharFormat, QColor, QFont, QTextCursor, QDesktopServices, QPainter,
+    QTextFormat, QFontMetricsF, QTextDocument, QKeySequence, QFontDatabase
+)
 import pyautogui
 from pynput import mouse, keyboard
 
+class ScriptLineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def sizeHint(self):
+        return QSize(self.editor.lineNumberAreaWidth(), 0)
+
+    def paintEvent(self, event):
+        self.editor.lineNumberAreaPaintEvent(event)
+
+
 class ScriptEditor(QPlainTextEdit):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, font_family=None):
         super().__init__(parent)
         self.completer = None
+        self.preferred_font_family = font_family
+        self.line_number_area = ScriptLineNumberArea(self)
+
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.setFont(self.build_editor_font())
+        tab_width = QFontMetricsF(self.font()).horizontalAdvance(' ') * 4
+        self.setTabStopDistance(tab_width)
+
+        self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
+        self.updateRequest.connect(self.updateLineNumberArea)
+        self.cursorPositionChanged.connect(self.highlightCurrentLine)
+        self.updateLineNumberAreaWidth(0)
+        self.highlightCurrentLine()
+
+    def build_editor_font(self):
+        families = {name.lower(): name for name in QFontDatabase().families()}
+        candidates = []
+        if self.preferred_font_family:
+            candidates.append(self.preferred_font_family)
+        candidates.extend(["JetBrains Mono", "Cascadia Mono", "Cascadia Code", "Consolas", "Courier New"])
+
+        selected = None
+        for name in candidates:
+            actual = families.get(name.lower())
+            if actual:
+                selected = actual
+                break
+        if selected is None:
+            selected = "Consolas"
+
+        font = QFont(selected)
+        font.setPointSize(10)
+        font.setStyleHint(QFont.Monospace)
+        return font
+
+    def lineNumberAreaWidth(self):
+        digits = len(str(max(1, self.blockCount())))
+        return 10 + self.fontMetrics().horizontalAdvance('9') * digits
+
+    def updateLineNumberAreaWidth(self, _):
+        self.setViewportMargins(self.lineNumberAreaWidth(), 0, 0, 0)
+
+    def updateLineNumberArea(self, rect, dy):
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self.updateLineNumberAreaWidth(0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        contents_rect = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(contents_rect.left(), contents_rect.top(), self.lineNumberAreaWidth(), contents_rect.height())
+        )
+
+    def lineNumberAreaPaintEvent(self, event):
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor(0, 0, 0, 20))
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = int(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + int(self.blockBoundingRect(block).height())
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                line_number = str(block_number + 1)
+                if block_number == self.textCursor().blockNumber():
+                    painter.setPen(QColor(230, 230, 230))
+                else:
+                    painter.setPen(QColor(140, 140, 140))
+                painter.drawText(
+                    0,
+                    top,
+                    self.line_number_area.width() - 4,
+                    self.fontMetrics().height(),
+                    Qt.AlignRight,
+                    line_number
+                )
+
+            block = block.next()
+            top = bottom
+            bottom = top + int(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def highlightCurrentLine(self):
+        if self.isReadOnly():
+            self.setExtraSelections([])
+            return
+        selection = QTextEdit.ExtraSelection()
+        selection.format.setBackground(QColor(255, 255, 255, 28))
+        selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+        selection.cursor = self.textCursor()
+        selection.cursor.clearSelection()
+        self.setExtraSelections([selection])
 
     def setCompleter(self, completer):
         if self.completer:
@@ -65,6 +177,8 @@ class ScriptEditor(QPlainTextEdit):
 
         # Handle auto-completion
         super().keyPressEvent(event)
+        if not self.completer:
+            return
         completion_prefix = self.textUnderCursor()
 
         # If the completer is not visible, we do nothing here
@@ -85,50 +199,69 @@ class ScriptSyntaxHighlighter(QSyntaxHighlighter):
     def __init__(self, parent):
         super().__init__(parent)
         self.rules = []
-
-        # Macro key start definition
-        macro_font = QTextCharFormat()
-        macro_font.setForeground(QColor(60, 64, 94))
-        macro_font.setFontWeight(QFont.Bold)
-        macros = [r'--<[^>\n]+>'] # e.g. --<k> or --<ctrl+alt+k>
-        self.add_rule(macros, macro_font)
-
-        # Function
-        function_font = QTextCharFormat()
-        function_font.setForeground(Qt.darkMagenta)
-        function_font.setFontWeight(QFont.Bold)
-        keywords = ['wait', 'press', 'move', 'click', 'move']
-        self.add_rule(keywords, function_font)
-
-        # Keywords
-        keyword_font = QTextCharFormat()
-        keyword_font.setForeground(Qt.darkYellow)
-        keyword_font.setFontWeight(QFont.Bold)
-        keywords = ['loop']
-        self.add_rule(keywords, keyword_font)
-
-        # Numbers and times (e.g. 1s, 2ms)
-        number_font = QTextCharFormat()
-        number_font.setForeground(Qt.darkRed)
-        numbers = [r'\b\d+(?:ms|s|ds|cs|x|y)?\b']
-        self.add_rule(numbers, number_font)
-
-        # Strings
-        string_font = QTextCharFormat()
-        string_font.setForeground(QColor('green'))
-        strings = ['".*"', "'.*'"]
-        self.add_rule(strings, string_font)
-
-        # Comments
-        comment_font = QTextCharFormat()
-        comment_font.setForeground(Qt.darkGreen)
-        comments = ['//.*']
-        self.add_rule(comments, comment_font)
+        self.patterns = {
+            "trigger": [r'--<[^>\n]+>'],
+            "function": [r'\bwait\b', r'\bpress\b', r'\bmove\b', r'\bclick\b'],
+            "keyword": [r'\bloop\b'],
+            "number": [r'\b\d+(?:ms|s|ds|cs|x|y)?\b'],
+            "string": [r'".*"', r"'.*'"],
+            "comment": [r'//.*'],
+        }
+        self.apply_theme_colors()
 
     def add_rule(self, patterns, format):
         for pattern in patterns:
             expression = QRegExp(pattern)
             self.rules.append((expression, format))
+
+    def apply_theme_colors(self, theme_colors=None):
+        base_text = QColor("#d9d9d9")
+        primary = QColor("#67a7ff")
+        secondary = QColor("#e0b96d")
+        accent = QColor("#8ad4b3")
+
+        if isinstance(theme_colors, dict):
+            if QColor(theme_colors.get("text", "")).isValid():
+                base_text = QColor(theme_colors["text"])
+            if QColor(theme_colors.get("primary", "")).isValid():
+                primary = QColor(theme_colors["primary"])
+            if QColor(theme_colors.get("secondary", "")).isValid():
+                secondary = QColor(theme_colors["secondary"])
+            if QColor(theme_colors.get("accent", "")).isValid():
+                accent = QColor(theme_colors["accent"])
+
+        trigger_format = QTextCharFormat()
+        trigger_format.setForeground(primary.lighter(140))
+        trigger_format.setFontWeight(QFont.Bold)
+
+        function_format = QTextCharFormat()
+        function_format.setForeground(primary.lighter(120))
+        function_format.setFontWeight(QFont.Bold)
+
+        keyword_format = QTextCharFormat()
+        keyword_format.setForeground(accent.lighter(120))
+        keyword_format.setFontWeight(QFont.Bold)
+
+        number_format = QTextCharFormat()
+        number_format.setForeground(secondary.lighter(115))
+
+        string_format = QTextCharFormat()
+        string_format.setForeground(secondary.lighter(135))
+
+        comment_format = QTextCharFormat()
+        comment_color = QColor(base_text)
+        comment_color.setAlpha(165)
+        comment_format.setForeground(comment_color)
+        comment_format.setFontItalic(True)
+
+        self.rules = []
+        self.add_rule(self.patterns["trigger"], trigger_format)
+        self.add_rule(self.patterns["function"], function_format)
+        self.add_rule(self.patterns["keyword"], keyword_format)
+        self.add_rule(self.patterns["number"], number_format)
+        self.add_rule(self.patterns["string"], string_format)
+        self.add_rule(self.patterns["comment"], comment_format)
+        self.rehighlight()
 
     def highlightBlock(self, text):
         for pattern, format in self.rules:
@@ -165,6 +298,9 @@ class ModMenu(QMainWindow):
         self.script_bindings = {}
         self.script_runtime_cache = {}
         self.corel_runtime_module = None
+        self.active_theme_colors = None
+        self.full_tab_names = ['Recoil', 'Configs', 'Scripts', 'Themes', 'Options']
+        self.compact_tab_names = ['Rc', 'Cfg', 'Scr', 'Th', 'Opt']
         self.script_running_inprocess = False
         self.script_state_lock = threading.Lock()
 
@@ -202,6 +338,8 @@ class ModMenu(QMainWindow):
         if self.app is None:
             self.app = QApplication.instance() or QApplication([])
         self.app.setStyle("Fusion")
+        self.setup_font_preferences()
+        self.app.setFont(QFont(self.ui_font_family, 10))
         self.setWindowTitle('Rainbow 6 Siege Mod Menu')
 
         self.resize(*self.expanded_size)
@@ -213,11 +351,11 @@ class ModMenu(QMainWindow):
         self.setCentralWidget(central_widget)
 
         self.tab_widget = QTabWidget()
-        central_layout = QVBoxLayout()
-        central_layout.setContentsMargins(8, 8, 8, 8)
-        central_layout.setSpacing(8)
-        central_layout.addWidget(self.tab_widget)
-        central_widget.setLayout(central_layout)
+        self.central_layout = QVBoxLayout()
+        self.central_layout.setContentsMargins(8, 8, 8, 8)
+        self.central_layout.setSpacing(8)
+        self.central_layout.addWidget(self.tab_widget)
+        central_widget.setLayout(self.central_layout)
 
         recoil_tab = QWidget()
         config_tab = QWidget()
@@ -238,11 +376,14 @@ class ModMenu(QMainWindow):
         self.createOptionsTab(options_tab)
         self.apply_global_styles()
         self.apply_tooltips()
+        self.apply_editor_fonts()
+        self.apply_compact_layout_state()
 
         self.update_slider_value(self.recoil_slider.value())
         self.update_x_slider_value(self.recoil_x_slider.value())
         self.update_delay_value(self.delay_slider.value())
         self.update_current_script_label()
+        self.update_editor_status_labels()
         self.update_recoil_runtime_label()
         self.update_recoil_info_panel()
         self.refresh_script_library_list()
@@ -254,6 +395,7 @@ class ModMenu(QMainWindow):
         layout.setSpacing(8)
 
         state_group = QGroupBox("Runtime")
+        self.recoil_runtime_group = state_group
         state_layout = QFormLayout(state_group)
         self.recoil_checkbox = QCheckBox('Enable Recoil Manager', self)
         self.recoil_checkbox.stateChanged.connect(self.toggle_recoil)
@@ -272,6 +414,7 @@ class ModMenu(QMainWindow):
         layout.addWidget(state_group)
 
         values_group = QGroupBox("Values")
+        self.recoil_values_group = values_group
         values_layout = QVBoxLayout(values_group)
         values_layout.setSpacing(6)
 
@@ -303,17 +446,21 @@ class ModMenu(QMainWindow):
         layout.addWidget(values_group)
 
         quick_actions = QHBoxLayout()
-        apply_once_button = QPushButton("Apply Once")
-        apply_once_button.clicked.connect(self.apply_recoil_once)
-        reset_button = QPushButton("Reset Values")
-        reset_button.clicked.connect(self.reset_recoil_values)
-        quick_actions.addWidget(apply_once_button)
-        quick_actions.addWidget(reset_button)
-        layout.addLayout(quick_actions)
+        self.apply_once_button = QPushButton("Apply Once")
+        self.apply_once_button.clicked.connect(self.apply_recoil_once)
+        self.reset_recoil_values_button = QPushButton("Reset Values")
+        self.reset_recoil_values_button.clicked.connect(self.reset_recoil_values)
+        quick_actions.addWidget(self.apply_once_button)
+        quick_actions.addWidget(self.reset_recoil_values_button)
+        self.recoil_quick_actions_widget = QWidget()
+        self.recoil_quick_actions_widget.setLayout(quick_actions)
+        layout.addWidget(self.recoil_quick_actions_widget)
 
         guide_group = QGroupBox("Guide")
+        self.recoil_guide_group = guide_group
         guide_layout = QVBoxLayout(guide_group)
         self.recoil_info_box = QPlainTextEdit()
+        self.recoil_info_box.setObjectName("infoOutput")
         self.recoil_info_box.setReadOnly(True)
         self.recoil_info_box.setMinimumHeight(120)
         guide_layout.addWidget(self.recoil_info_box)
@@ -342,35 +489,36 @@ class ModMenu(QMainWindow):
         layout.addLayout(filter_row)
 
         actions_row = QHBoxLayout()
-        save_button = QPushButton('Save')
-        save_button.clicked.connect(self.save_preset)
-        load_button = QPushButton('Load')
-        load_button.clicked.connect(self.load_preset)
-        delete_button = QPushButton('Delete')
-        delete_button.clicked.connect(self.delete_preset)
-        rename_button = QPushButton('Rename')
-        rename_button.clicked.connect(self.rename_preset)
-        duplicate_button = QPushButton('Duplicate')
-        duplicate_button.clicked.connect(self.duplicate_preset)
-        actions_row.addWidget(save_button)
-        actions_row.addWidget(load_button)
-        actions_row.addWidget(delete_button)
-        actions_row.addWidget(rename_button)
-        actions_row.addWidget(duplicate_button)
+        self.save_preset_button = QPushButton('Save')
+        self.save_preset_button.clicked.connect(self.save_preset)
+        self.load_preset_button = QPushButton('Load')
+        self.load_preset_button.clicked.connect(self.load_preset)
+        self.delete_preset_button = QPushButton('Delete')
+        self.delete_preset_button.clicked.connect(self.delete_preset)
+        self.rename_preset_button = QPushButton('Rename')
+        self.rename_preset_button.clicked.connect(self.rename_preset)
+        self.duplicate_preset_button = QPushButton('Duplicate')
+        self.duplicate_preset_button.clicked.connect(self.duplicate_preset)
+        actions_row.addWidget(self.save_preset_button)
+        actions_row.addWidget(self.load_preset_button)
+        actions_row.addWidget(self.delete_preset_button)
+        actions_row.addWidget(self.rename_preset_button)
+        actions_row.addWidget(self.duplicate_preset_button)
         layout.addLayout(actions_row)
 
         self.preset_list = QListWidget()
+        self.preset_list.setObjectName("presetList")
         self.preset_list.itemSelectionChanged.connect(self.update_preset_summary_label)
         self.preset_list.itemDoubleClicked.connect(lambda _item: self.load_preset())
         layout.addWidget(self.preset_list)
 
         transfer_row = QHBoxLayout()
-        export_button = QPushButton("Export")
-        export_button.clicked.connect(self.export_presets)
-        import_button = QPushButton("Import")
-        import_button.clicked.connect(self.import_presets)
-        transfer_row.addWidget(export_button)
-        transfer_row.addWidget(import_button)
+        self.export_presets_button = QPushButton("Export")
+        self.export_presets_button.clicked.connect(self.export_presets)
+        self.import_presets_button = QPushButton("Import")
+        self.import_presets_button.clicked.connect(self.import_presets)
+        transfer_row.addWidget(self.export_presets_button)
+        transfer_row.addWidget(self.import_presets_button)
         layout.addLayout(transfer_row)
 
         self.preset_summary_label = QLabel("No preset selected")
@@ -383,20 +531,22 @@ class ModMenu(QMainWindow):
         script_layout.setSpacing(8)
 
         top_row = QHBoxLayout()
-        hotkey_label = QLabel("Hotkey:")
+        self.hotkey_label = QLabel("Hotkey:")
         self.hotkey_input = QLineEdit()
         self.hotkey_input.setPlaceholderText("optional override (e.g. ctrl+shift+k)")
         self.auto_save_on_run_checkbox = QCheckBox("Auto-save before manual run")
         self.auto_save_on_run_checkbox.setChecked(True)
-        top_row.addWidget(hotkey_label)
+        top_row.addWidget(self.hotkey_label)
         top_row.addWidget(self.hotkey_input, 1)
         top_row.addWidget(self.auto_save_on_run_checkbox)
         script_layout.addLayout(top_row)
 
         split = QSplitter(Qt.Horizontal)
+        self.script_splitter = split
         script_layout.addWidget(split, 1)
 
         library_panel = QWidget()
+        self.script_library_panel = library_panel
         library_layout = QVBoxLayout(library_panel)
         library_layout.setContentsMargins(0, 0, 0, 0)
         library_layout.setSpacing(6)
@@ -440,34 +590,58 @@ class ModMenu(QMainWindow):
         self.current_script_label.setToolTip("")
         script_edit_layout.addWidget(self.current_script_label)
 
-        self.script_editor = ScriptEditor()
+        editor_meta_row = QHBoxLayout()
+        self.editor_find_input = QLineEdit()
+        self.editor_find_input.setPlaceholderText("Find in file...")
+        self.editor_find_input.returnPressed.connect(self.find_next_in_editor)
+        self.find_prev_button = QPushButton("Prev")
+        self.find_prev_button.clicked.connect(self.find_prev_in_editor)
+        self.find_next_button = QPushButton("Next")
+        self.find_next_button.clicked.connect(self.find_next_in_editor)
+        self.editor_case_checkbox = QCheckBox("Case")
+        self.editor_case_checkbox.setChecked(False)
+        self.editor_position_label = QLabel("Ln 1, Col 1")
+        self.editor_modified_label = QLabel("Saved")
+        editor_meta_row.addWidget(self.editor_find_input, 1)
+        editor_meta_row.addWidget(self.find_prev_button)
+        editor_meta_row.addWidget(self.find_next_button)
+        editor_meta_row.addWidget(self.editor_case_checkbox)
+        editor_meta_row.addWidget(self.editor_position_label)
+        editor_meta_row.addWidget(self.editor_modified_label)
+        script_edit_layout.addLayout(editor_meta_row)
+
+        self.script_editor = ScriptEditor(font_family=self.code_font_family)
+        self.script_editor.setObjectName("scriptEditor")
         self.highlighter = ScriptSyntaxHighlighter(self.script_editor.document())
+        self.script_editor.cursorPositionChanged.connect(self.update_editor_status_labels)
+        self.script_editor.document().modificationChanged.connect(self.update_editor_status_labels)
         script_edit_layout.addWidget(self.script_editor, 1)
 
         completer = QCompleter(["wait", "press", "move", "loop", "click"])
         self.script_editor.setCompleter(completer)
+        self.setup_editor_shortcuts()
 
         edit_buttons_top = QHBoxLayout()
-        new_button = QPushButton('New')
-        new_button.clicked.connect(self.create_new_script)
-        load_script_button = QPushButton('Load')
-        load_script_button.clicked.connect(self.load_script)
-        save_script_button = QPushButton('Save')
-        save_script_button.clicked.connect(self.save_script)
-        edit_buttons_top.addWidget(new_button)
-        edit_buttons_top.addWidget(load_script_button)
-        edit_buttons_top.addWidget(save_script_button)
+        self.new_script_button = QPushButton('New')
+        self.new_script_button.clicked.connect(self.create_new_script)
+        self.load_script_button = QPushButton('Load')
+        self.load_script_button.clicked.connect(self.load_script)
+        self.save_script_button = QPushButton('Save')
+        self.save_script_button.clicked.connect(self.save_script)
+        edit_buttons_top.addWidget(self.new_script_button)
+        edit_buttons_top.addWidget(self.load_script_button)
+        edit_buttons_top.addWidget(self.save_script_button)
         script_edit_layout.addLayout(edit_buttons_top)
 
         edit_buttons_bottom = QHBoxLayout()
-        delete_script_button = QPushButton('Delete')
-        delete_script_button.clicked.connect(self.delete_script)
-        bind_loaded_script_button = QPushButton('Bind Loaded Script')
-        bind_loaded_script_button.clicked.connect(self.bind_loaded_script_hotkey)
+        self.delete_script_button = QPushButton('Delete')
+        self.delete_script_button.clicked.connect(self.delete_script)
+        self.bind_loaded_script_button = QPushButton('Bind Loaded Script')
+        self.bind_loaded_script_button.clicked.connect(self.bind_loaded_script_hotkey)
         self.run_script_button = QPushButton('Run')
         self.run_script_button.clicked.connect(self.run_script_clicked)
-        edit_buttons_bottom.addWidget(delete_script_button)
-        edit_buttons_bottom.addWidget(bind_loaded_script_button)
+        edit_buttons_bottom.addWidget(self.delete_script_button)
+        edit_buttons_bottom.addWidget(self.bind_loaded_script_button)
         edit_buttons_bottom.addWidget(self.run_script_button)
         script_edit_layout.addLayout(edit_buttons_bottom)
 
@@ -477,12 +651,12 @@ class ModMenu(QMainWindow):
         bindings_layout.setSpacing(6)
 
         bindings_actions = QHBoxLayout()
-        bind_file_script_button = QPushButton('Bind Script File')
-        bind_file_script_button.clicked.connect(self.bind_script_file_hotkey)
-        remove_binding_button = QPushButton('Remove Selected')
-        remove_binding_button.clicked.connect(self.remove_selected_script_binding)
-        bindings_actions.addWidget(bind_file_script_button)
-        bindings_actions.addWidget(remove_binding_button)
+        self.bind_file_script_button = QPushButton('Bind Script File')
+        self.bind_file_script_button.clicked.connect(self.bind_script_file_hotkey)
+        self.remove_binding_button = QPushButton('Remove Selected')
+        self.remove_binding_button.clicked.connect(self.remove_selected_script_binding)
+        bindings_actions.addWidget(self.bind_file_script_button)
+        bindings_actions.addWidget(self.remove_binding_button)
         bindings_layout.addLayout(bindings_actions)
 
         self.script_binding_list = QListWidget()
@@ -494,15 +668,16 @@ class ModMenu(QMainWindow):
         output_layout.setContentsMargins(4, 4, 4, 4)
         output_layout.setSpacing(6)
         output_actions = QHBoxLayout()
-        clear_output_button = QPushButton("Clear Output")
-        clear_output_button.clicked.connect(self.clear_script_output)
+        self.clear_output_button = QPushButton("Clear Output")
+        self.clear_output_button.clicked.connect(self.clear_script_output)
         self.clear_output_before_run_checkbox = QCheckBox("Clear on run")
         self.clear_output_before_run_checkbox.setChecked(True)
-        output_actions.addWidget(clear_output_button)
+        output_actions.addWidget(self.clear_output_button)
         output_actions.addWidget(self.clear_output_before_run_checkbox)
         output_actions.addStretch()
         output_layout.addLayout(output_actions)
         self.script_output = QPlainTextEdit()
+        self.script_output.setObjectName("logOutput")
         self.script_output.setReadOnly(True)
         self.script_output.setPlaceholderText("Script execution output will appear here...")
         output_layout.addWidget(self.script_output, 1)
@@ -534,15 +709,15 @@ class ModMenu(QMainWindow):
 
         actions_group = QGroupBox("Quick Actions")
         actions_layout = QHBoxLayout(actions_group)
-        restart_hotkeys_button = QPushButton("Restart Hotkeys")
-        restart_hotkeys_button.clicked.connect(self.restart_hotkey_listener)
-        open_project_button = QPushButton("Open BASO Folder")
-        open_project_button.clicked.connect(self.open_project_folder)
-        clear_cache_button = QPushButton("Clear AST Cache")
-        clear_cache_button.clicked.connect(self.clear_script_runtime_cache)
-        actions_layout.addWidget(restart_hotkeys_button)
-        actions_layout.addWidget(open_project_button)
-        actions_layout.addWidget(clear_cache_button)
+        self.restart_hotkeys_button = QPushButton("Restart Hotkeys")
+        self.restart_hotkeys_button.clicked.connect(self.restart_hotkey_listener)
+        self.open_project_button = QPushButton("Open BASO Folder")
+        self.open_project_button.clicked.connect(self.open_project_folder)
+        self.clear_cache_button = QPushButton("Clear AST Cache")
+        self.clear_cache_button.clicked.connect(self.clear_script_runtime_cache)
+        actions_layout.addWidget(self.restart_hotkeys_button)
+        actions_layout.addWidget(self.open_project_button)
+        actions_layout.addWidget(self.clear_cache_button)
         layout.addWidget(actions_group)
 
         self.runtime_summary_label = QLabel("Runtime summary unavailable")
@@ -552,28 +727,180 @@ class ModMenu(QMainWindow):
 
     def apply_global_styles(self):
         self.setStyleSheet("""
-            QSlider {
-                background-color: transparent;
-                height: 10px;
+            QWidget {
+                font-size: 10pt;
+            }
+            QGroupBox {
+                border: 1px solid rgba(120, 120, 120, 140);
+                border-radius: 12px;
+                margin-top: 6px;
+                padding: 16px 12px 10px 12px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: padding;
+                subcontrol-position: top left;
+                left: 10px;
+                top: 1px;
+                padding: 0 4px;
+            }
+            QPushButton {
+                border-radius: 10px;
+                padding: 7px 13px;
+            }
+            QLineEdit, QPlainTextEdit, QListWidget, QComboBox {
+                border-radius: 10px;
+                padding: 6px 8px;
             }
             QSlider::groove:horizontal {
                 height: 8px;
                 border-radius: 4px;
             }
             QSlider::handle:horizontal {
-                width: 14px;
-                margin: -3px 0;
-                border-radius: 7px;
+                width: 16px;
+                margin: -2px 0;
+                border-radius: 8px;
             }
             QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QListWidget, QLineEdit, QPlainTextEdit, QComboBox {
-                border-radius: 6px;
-                padding: 3px;
+                width: 16px;
+                height: 16px;
             }
         """)
+
+    def setup_font_preferences(self):
+        self.ui_font_family = self.pick_font_family(
+            ["Inter", "IBM Plex Sans", "Segoe UI", "Noto Sans", "Arial"],
+            fallback="Segoe UI"
+        )
+        self.code_font_family = self.pick_font_family(
+            ["JetBrains Mono", "Cascadia Mono", "Cascadia Code", "Consolas", "Courier New"],
+            fallback="Consolas"
+        )
+
+    def pick_font_family(self, candidates, fallback):
+        families = {name.lower(): name for name in QFontDatabase().families()}
+        for candidate in candidates:
+            actual = families.get(candidate.lower())
+            if actual:
+                return actual
+        return fallback
+
+    def apply_editor_fonts(self, code_point_size=None):
+        if code_point_size is None:
+            code_point_size = 9 if self.compact_mode else 10
+        code_font = QFont(self.code_font_family)
+        code_font.setPointSize(code_point_size)
+        code_font.setStyleHint(QFont.Monospace)
+
+        if hasattr(self, 'script_editor') and self.script_editor is not None:
+            self.script_editor.setFont(code_font)
+            self.script_editor.updateLineNumberAreaWidth(0)
+        if hasattr(self, 'script_output') and self.script_output is not None:
+            self.script_output.setFont(code_font)
+        if hasattr(self, 'recoil_info_box') and self.recoil_info_box is not None:
+            self.recoil_info_box.setFont(code_font)
+
+    def apply_compact_layout_state(self):
+        compact = bool(self.compact_mode)
+        ui_size = 9 if compact else 10
+        if self.app is not None:
+            self.app.setFont(QFont(self.ui_font_family, ui_size))
+        self.apply_editor_fonts(9 if compact else 10)
+
+        if hasattr(self, 'central_layout') and self.central_layout is not None:
+            if compact:
+                self.central_layout.setContentsMargins(4, 4, 4, 4)
+                self.central_layout.setSpacing(4)
+            else:
+                self.central_layout.setContentsMargins(8, 8, 8, 8)
+                self.central_layout.setSpacing(8)
+
+        if hasattr(self, 'tab_widget') and self.tab_widget is not None:
+            self.tab_widget.setUsesScrollButtons(compact)
+            self.tab_widget.tabBar().setExpanding(not compact)
+            self.tab_widget.tabBar().setElideMode(Qt.ElideRight if compact else Qt.ElideNone)
+            self.set_tab_visible(2, not compact)  # Scripts
+            self.set_tab_visible(3, not compact)  # Themes
+            names = self.compact_tab_names if compact else self.full_tab_names
+            for index, name in enumerate(names):
+                if compact and index in (2, 3):
+                    continue
+                if index < self.tab_widget.count():
+                    self.tab_widget.setTabText(index, name)
+
+        if hasattr(self, 'recoil_runtime_group') and self.recoil_runtime_group is not None:
+            self.recoil_runtime_group.setVisible(True)
+        if hasattr(self, 'recoil_values_group') and self.recoil_values_group is not None:
+            self.recoil_values_group.setVisible(True)
+        if hasattr(self, 'recoil_quick_actions_widget') and self.recoil_quick_actions_widget is not None:
+            self.recoil_quick_actions_widget.setVisible(not compact)
+        if hasattr(self, 'recoil_guide_group') and self.recoil_guide_group is not None:
+            self.recoil_guide_group.setVisible(not compact)
+        if hasattr(self, 'preset_summary_label') and self.preset_summary_label is not None:
+            self.preset_summary_label.setVisible(not compact)
+        if hasattr(self, 'runtime_summary_label') and self.runtime_summary_label is not None:
+            self.runtime_summary_label.setVisible(not compact)
+        if hasattr(self, 'editor_position_label') and self.editor_position_label is not None:
+            self.editor_position_label.setVisible(not compact)
+        if hasattr(self, 'editor_case_checkbox') and self.editor_case_checkbox is not None:
+            self.editor_case_checkbox.setVisible(not compact)
+        if hasattr(self, 'editor_modified_label') and self.editor_modified_label is not None:
+            self.editor_modified_label.setVisible(not compact)
+        if hasattr(self, 'find_prev_button') and self.find_prev_button is not None:
+            self.find_prev_button.setVisible(not compact)
+
+        if hasattr(self, 'script_library_panel') and self.script_library_panel is not None:
+            self.script_library_panel.setVisible(not compact)
+        if hasattr(self, 'script_splitter') and self.script_splitter is not None:
+            if compact:
+                self.script_splitter.setSizes([0, 1])
+            else:
+                self.script_library_panel.show()
+                self.script_splitter.setSizes([280, 640])
+
+        if hasattr(self, 'auto_save_on_run_checkbox') and self.auto_save_on_run_checkbox is not None:
+            self.auto_save_on_run_checkbox.setVisible(not compact)
+        if hasattr(self, 'bind_loaded_script_button') and self.bind_loaded_script_button is not None:
+            self.bind_loaded_script_button.setVisible(not compact)
+        if hasattr(self, 'hotkey_label') and self.hotkey_label is not None:
+            self.hotkey_label.setVisible(not compact)
+
+        if hasattr(self, 'rename_preset_button') and self.rename_preset_button is not None:
+            self.rename_preset_button.setVisible(not compact)
+        if hasattr(self, 'duplicate_preset_button') and self.duplicate_preset_button is not None:
+            self.duplicate_preset_button.setVisible(not compact)
+        if hasattr(self, 'export_presets_button') and self.export_presets_button is not None:
+            self.export_presets_button.setVisible(not compact)
+        if hasattr(self, 'import_presets_button') and self.import_presets_button is not None:
+            self.import_presets_button.setVisible(not compact)
+
+        if hasattr(self, 'open_project_button') and self.open_project_button is not None:
+            self.open_project_button.setVisible(not compact)
+        if hasattr(self, 'clear_cache_button') and self.clear_cache_button is not None:
+            self.clear_cache_button.setText("Cache" if compact else "Clear AST Cache")
+        if hasattr(self, 'restart_hotkeys_button') and self.restart_hotkeys_button is not None:
+            self.restart_hotkeys_button.setText("Hotkeys" if compact else "Restart Hotkeys")
+        if hasattr(self, 'remove_binding_button') and self.remove_binding_button is not None:
+            self.remove_binding_button.setText("Remove" if compact else "Remove Selected")
+        if hasattr(self, 'bind_file_script_button') and self.bind_file_script_button is not None:
+            self.bind_file_script_button.setText("Bind" if compact else "Bind Script File")
+        if hasattr(self, 'clear_output_button') and self.clear_output_button is not None:
+            self.clear_output_button.setText("Clear" if compact else "Clear Output")
+        if hasattr(self, 'clear_output_before_run_checkbox') and self.clear_output_before_run_checkbox is not None:
+            self.clear_output_before_run_checkbox.setText("Clr on run" if compact else "Clear on run")
+
+    def set_tab_visible(self, index, visible):
+        if not hasattr(self, 'tab_widget') or self.tab_widget is None:
+            return
+        if index >= self.tab_widget.count():
+            return
+        tab_bar = self.tab_widget.tabBar()
+        if hasattr(tab_bar, "setTabVisible"):
+            tab_bar.setTabVisible(index, visible)
+        else:
+            self.tab_widget.setTabEnabled(index, visible)
+            self.tab_widget.setTabText(index, "" if not visible else self.full_tab_names[index])
+        if not visible and self.tab_widget.currentIndex() == index:
+            self.tab_widget.setCurrentIndex(0)
 
     def apply_tooltips(self):
         tips = {
@@ -591,6 +918,11 @@ class ModMenu(QMainWindow):
             "script_search_input": "Filter discovered .corel files by name/path.",
             "script_library_list": "Double-click a script to open it.",
             "current_script_label": "Current file loaded in editor.",
+            "script_editor": "Minimal editor: line numbers, syntax highlight, autocomplete, Ctrl+S/Ctrl+O/Ctrl+F, F5 to run.",
+            "editor_find_input": "Find text in the current script (Enter = next result).",
+            "editor_case_checkbox": "Case-sensitive search.",
+            "editor_position_label": "Current cursor position.",
+            "editor_modified_label": "Shows whether current script has unsaved changes.",
             "run_script_button": "Run current script immediately.",
             "script_binding_list": "Double-click a binding to open its script.",
             "clear_output_before_run_checkbox": "Clear output panel before each run.",
@@ -834,86 +1166,247 @@ class ModMenu(QMainWindow):
         if not isinstance(colors, dict) or not required_keys.issubset(colors.keys()):
             raise Exception('Invalid theme colors, expected keys: background, primary, secondary, accent, text')
 
+        background = QColor(colors['background'])
+        text_color = QColor(colors['text'])
+        primary = QColor(colors['primary'])
+        secondary = QColor(colors['secondary'])
+        accent = QColor(colors['accent'])
+
+        is_dark = background.lightness() < 128
+        panel_color = background.lighter(112) if is_dark else background.darker(104)
+        input_color = background.lighter(107) if is_dark else background.darker(108)
+        tab_idle = background.lighter(120) if is_dark else background.darker(103)
+        border_color = secondary.lighter(120) if is_dark else secondary.darker(110)
+        subtle_text = text_color.lighter(135) if is_dark else text_color.darker(145)
+        hover_color = accent.lighter(110) if is_dark else accent.darker(110)
+        pressed_color = accent.darker(110) if is_dark else accent.darker(125)
+
+        def rgba(color, alpha):
+            return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha})"
+
+        ui_font = getattr(self, "ui_font_family", "Segoe UI")
+        compact_css = ""
+        if self.compact_mode:
+            compact_css = """
+            QWidget {
+                font-size: 8.5pt;
+            }
+            QLabel {
+                margin: 0px;
+            }
+            QGroupBox {
+                margin-top: 4px;
+                padding: 12px 7px 6px 7px;
+                border-radius: 9px;
+            }
+            QGroupBox::title {
+                left: 6px;
+                top: 1px;
+                padding: 0 3px;
+            }
+            QPushButton {
+                padding: 4px 7px;
+                border-radius: 7px;
+                font-weight: 500;
+            }
+            QLineEdit, QPlainTextEdit, QListWidget, QComboBox {
+                padding: 3px 5px;
+                border-radius: 7px;
+            }
+            QTabBar::tab {
+                padding: 4px 8px;
+                margin-right: 3px;
+                min-width: 0px;
+                border-radius: 7px;
+            }
+            QPlainTextEdit#scriptEditor, QPlainTextEdit#logOutput, QPlainTextEdit#infoOutput {
+                border-radius: 8px;
+                padding: 5px;
+            }
+            """
         self.setStyleSheet(f"""
             QMainWindow {{
                 background-color: {colors['background']};
                 color: {colors['text']};
-                font-family: 'Segoe UI', Arial, sans-serif;
+                font-family: '{ui_font}';
             }}
             QWidget {{
                 color: {colors['text']};
             }}
-            QPushButton {{
-                background-color: {colors['primary']};
+            QToolTip {{
                 color: {colors['text']};
+                background: {rgba(panel_color, 240)};
+                border: 1px solid {border_color.name()};
+                border-radius: 8px;
+                padding: 6px 8px;
+            }}
+            QTabWidget::pane {{
                 border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
-                margin: 2px;
+                background: transparent;
+                margin-top: 8px;
+            }}
+            QTabBar {{
+                qproperty-drawBase: 0;
+            }}
+            QTabBar::tab {{
+                background: {tab_idle.name()};
+                color: {subtle_text.name()};
+                border: 1px solid transparent;
+                border-radius: 10px;
+                padding: 8px 14px;
+                margin-right: 6px;
+                margin-bottom: 2px;
+                min-width: 72px;
+            }}
+            QTabBar::tab:hover {{
+                color: {colors['text']};
+                border: 1px solid {rgba(border_color, 170)};
+            }}
+            QTabBar::tab:selected {{
+                background: {panel_color.name()};
+                color: {colors['text']};
+                border: 1px solid {border_color.name()};
+            }}
+            QGroupBox {{
+                background: {panel_color.name()};
+                border: 1px solid {rgba(border_color, 175)};
+                border-radius: 12px;
+                margin-top: 6px;
+                padding: 16px 12px 10px 12px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: padding;
+                subcontrol-position: top left;
+                left: 10px;
+                top: 1px;
+                padding: 0 4px;
+                color: {subtle_text.name()};
+                background: transparent;
+            }}
+            QPushButton {{
+                background-color: {rgba(primary, 70)};
+                color: {colors['text']};
+                border: 1px solid {rgba(border_color, 170)};
+                border-radius: 10px;
+                padding: 7px 13px;
+                margin: 1px;
+                font-weight: 600;
             }}
             QPushButton:hover {{
-                background-color: {colors['accent']};
+                background-color: {rgba(hover_color, 100)};
+                border: 1px solid {hover_color.name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {rgba(pressed_color, 120)};
+            }}
+            QLineEdit, QPlainTextEdit, QListWidget, QComboBox {{
+                background: {input_color.name()};
+                border: 1px solid {rgba(border_color, 180)};
+                border-radius: 10px;
+                padding: 6px 8px;
+                color: {colors['text']};
+                selection-background-color: {rgba(accent, 140)};
+            }}
+            QLineEdit:focus, QPlainTextEdit:focus, QListWidget:focus, QComboBox:focus {{
+                border: 1px solid {accent.name()};
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QListWidget::item {{
+                border-radius: 6px;
+                padding: 4px 6px;
+            }}
+            QListWidget::item:selected {{
+                background: {rgba(accent, 120)};
+                color: {colors['text']};
+            }}
+            QListWidget#presetList {{
+                padding: 6px;
+            }}
+            QListWidget#presetList::item {{
+                margin: 3px 2px;
+                padding: 8px 10px;
+                border: 1px solid {rgba(border_color, 120)};
+                border-radius: 8px;
+            }}
+            QListWidget#presetList::item:hover {{
+                background: {rgba(accent, 70)};
+                border: 1px solid {rgba(accent, 140)};
+            }}
+            QListWidget#presetList::item:selected {{
+                background: {rgba(accent, 120)};
+                border: 1px solid {accent.name()};
             }}
             QSlider::groove:horizontal {{
-                border: 1px solid #999999;
+                border: 1px solid {rgba(border_color, 170)};
                 height: 8px;
-                background: {colors['secondary']};
+                background: {rgba(secondary, 85)};
                 margin: 2px 0;
                 border-radius: 4px;
             }}
             QSlider::handle:horizontal {{
-                background: {colors['primary']};
-                border: 1px solid #5c5c5c;
-                width: 18px;
+                background: {accent.name()};
+                border: 1px solid {rgba(border_color, 220)};
+                width: 16px;
                 margin: -2px 0;
-                border-radius: 3px;
+                border-radius: 8px;
             }}
             QCheckBox {{
-                spacing: 5px;
+                spacing: 6px;
                 color: {colors['text']};
             }}
             QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
-            }}
-            QTabWidget::pane {{
-                border-top: 2px solid {colors['secondary']};
-                color: {colors['text']};
-                background: {colors['background']};
-            }}
-            QTabBar::tab {{
-                background: {colors['secondary']};
-                color: {colors['text']};
-                border-bottom: 2px solid transparent;
-                padding: 8px 10px;
-                margin: 0px;
-            }}
-            QTabBar::tab:selected {{
-                background: {colors['primary']};
-                border-bottom-color: {colors['accent']};
-            }}
-            QListWidget, QLineEdit, QPlainTextEdit, QComboBox {{
-                border: 1px solid {colors['secondary']};
+                width: 16px;
+                height: 16px;
                 border-radius: 4px;
-                padding: 3px;
-                background: {colors['background']};
-                color: {colors['text']};
+                border: 1px solid {rgba(border_color, 180)};
+                background: {input_color.name()};
             }}
-            QGroupBox {{
-                border: 1px solid {colors['secondary']};
-                border-radius: 6px;
-                margin-top: 10px;
-                padding-top: 6px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
+            QCheckBox::indicator:checked {{
+                background: {accent.name()};
+                border: 1px solid {accent.name()};
             }}
             QLabel {{
                 color: {colors['text']};
             }}
+            QPlainTextEdit#scriptEditor, QPlainTextEdit#logOutput, QPlainTextEdit#infoOutput {{
+                border-radius: 12px;
+                padding: 8px;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 10px;
+                margin: 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {rgba(border_color, 180)};
+                min-height: 28px;
+                border-radius: 5px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar:horizontal {{
+                background: transparent;
+                height: 10px;
+                margin: 4px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: {rgba(border_color, 180)};
+                min-width: 28px;
+                border-radius: 5px;
+            }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+                width: 0px;
+            }}
+            {compact_css}
         """)
+        if hasattr(self, 'highlighter') and self.highlighter is not None:
+            self.highlighter.apply_theme_colors(colors)
+        self.active_theme_colors = dict(colors)
+        self.apply_compact_layout_state()
 
     def update_slider_value(self, value):
         self.recoil_slider_label.setText(f'Recoil Control Y: {value}')
@@ -933,6 +1426,36 @@ class ModMenu(QMainWindow):
     def format_preset_text(self, name, y_value, x_value, delay):
         return f'{name} - Y: {y_value} - X: {x_value} - Delay: {delay} ms'
 
+    def format_preset_display_text(self, name, y_value, x_value, delay):
+        return f"{name}   ·   Y {y_value:+d}   X {x_value:+d}   {delay} ms"
+
+    def create_preset_item(self, name, y_value, x_value, delay):
+        serialized = self.format_preset_text(name, y_value, x_value, delay)
+        display = self.format_preset_display_text(name, y_value, x_value, delay)
+        item = QListWidgetItem(display)
+        item.setData(Qt.UserRole, serialized)
+        item.setToolTip(serialized)
+        return item
+
+    def update_preset_item(self, item, name, y_value, x_value, delay):
+        serialized = self.format_preset_text(name, y_value, x_value, delay)
+        display = self.format_preset_display_text(name, y_value, x_value, delay)
+        item.setText(display)
+        item.setData(Qt.UserRole, serialized)
+        item.setToolTip(serialized)
+
+    def get_preset_item_serialized(self, item):
+        if item is None:
+            return ""
+        serialized = item.data(Qt.UserRole)
+        if isinstance(serialized, str) and serialized.strip():
+            return serialized.strip()
+        text = item.text().strip()
+        return text
+
+    def parse_preset_item(self, item):
+        return self.parse_preset_text(self.get_preset_item_serialized(item))
+
     def parse_preset_text(self, text):
         match = re.match(r'^\s*(.*?)\s*-\s*Y:\s*(-?\d+)\s*-\s*X:\s*(-?\d+)\s*-\s*Delay:\s*(\d+)\s*ms\s*$', text)
         if not match:
@@ -942,7 +1465,7 @@ class ModMenu(QMainWindow):
     def get_existing_preset_names(self):
         names = set()
         for index in range(self.preset_list.count()):
-            parsed = self.parse_preset_text(self.preset_list.item(index).text())
+            parsed = self.parse_preset_item(self.preset_list.item(index))
             if parsed:
                 names.add(parsed[0].lower())
         return names
@@ -961,7 +1484,7 @@ class ModMenu(QMainWindow):
             return
         selected_item = self.preset_list.currentItem()
         if selected_item:
-            parsed = self.parse_preset_text(selected_item.text())
+            parsed = self.parse_preset_item(selected_item)
             if parsed:
                 name, y_value, x_value, delay = parsed
                 self.preset_summary_label.setText(
@@ -976,7 +1499,8 @@ class ModMenu(QMainWindow):
         token = text.strip().lower()
         for index in range(self.preset_list.count()):
             item = self.preset_list.item(index)
-            item.setHidden(token not in item.text().lower())
+            searchable = f"{item.text()} {self.get_preset_item_serialized(item)}".lower()
+            item.setHidden(token not in searchable)
 
     def save_preset(self):
         name = self.preset_name_edit.text().strip()
@@ -987,19 +1511,18 @@ class ModMenu(QMainWindow):
         y_value = self.recoil_slider.value()
         x_value = self.recoil_x_slider.value()
         delay = self.delay_slider.value()
-        item_text = self.format_preset_text(name, y_value, x_value, delay)
 
         replaced = False
         for index in range(self.preset_list.count()):
             item = self.preset_list.item(index)
-            parsed = self.parse_preset_text(item.text())
+            parsed = self.parse_preset_item(item)
             if parsed and parsed[0].lower() == name.lower():
-                item.setText(item_text)
+                self.update_preset_item(item, name, y_value, x_value, delay)
                 self.preset_list.setCurrentItem(item)
                 replaced = True
                 break
         if not replaced:
-            item = QListWidgetItem(item_text)
+            item = self.create_preset_item(name, y_value, x_value, delay)
             self.preset_list.addItem(item)
             self.preset_list.setCurrentItem(item)
 
@@ -1011,7 +1534,7 @@ class ModMenu(QMainWindow):
         selected_item = self.preset_list.currentItem()
         if not selected_item:
             return
-        parsed = self.parse_preset_text(selected_item.text())
+        parsed = self.parse_preset_item(selected_item)
         if not parsed:
             QMessageBox.warning(self, "Load Preset", "Selected preset has an invalid format.")
             return
@@ -1040,13 +1563,13 @@ class ModMenu(QMainWindow):
         if not selected_item or not new_name:
             QMessageBox.warning(self, "Rename Preset", "Select a preset and set a new name first.")
             return
-        parsed = self.parse_preset_text(selected_item.text())
+        parsed = self.parse_preset_item(selected_item)
         if not parsed:
             QMessageBox.warning(self, "Rename Preset", "Selected preset has an invalid format.")
             return
 
         _old_name, y_value, x_value, delay = parsed
-        selected_item.setText(self.format_preset_text(new_name, y_value, x_value, delay))
+        self.update_preset_item(selected_item, new_name, y_value, x_value, delay)
         self.save_presets()
         self.update_preset_summary_label()
 
@@ -1056,14 +1579,14 @@ class ModMenu(QMainWindow):
             QMessageBox.warning(self, "Duplicate Preset", "Select a preset to duplicate.")
             return
 
-        parsed = self.parse_preset_text(selected_item.text())
+        parsed = self.parse_preset_item(selected_item)
         if not parsed:
             QMessageBox.warning(self, "Duplicate Preset", "Selected preset has an invalid format.")
             return
 
         name, y_value, x_value, delay = parsed
         duplicated_name = self.make_unique_preset_name(f"{name}-copy")
-        duplicated_item = QListWidgetItem(self.format_preset_text(duplicated_name, y_value, x_value, delay))
+        duplicated_item = self.create_preset_item(duplicated_name, y_value, x_value, delay)
         self.preset_list.addItem(duplicated_item)
         self.preset_list.setCurrentItem(duplicated_item)
         self.preset_name_edit.setText(duplicated_name)
@@ -1075,7 +1598,7 @@ class ModMenu(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export Presets", self.presets_file, "Text Files (*.txt)")
         if not path:
             return
-        presets = [self.preset_list.item(index).text() for index in range(self.preset_list.count())]
+        presets = [self.get_preset_item_serialized(self.preset_list.item(index)) for index in range(self.preset_list.count())]
         try:
             with open(path, 'w') as file:
                 file.write('\n'.join(presets))
@@ -1103,7 +1626,7 @@ class ModMenu(QMainWindow):
             name, y_value, x_value, delay = parsed
             if name.lower() in existing_names:
                 name = self.make_unique_preset_name(name)
-            item = QListWidgetItem(self.format_preset_text(name, y_value, x_value, delay))
+            item = self.create_preset_item(name, y_value, x_value, delay)
             self.preset_list.addItem(item)
             existing_names.add(name.lower())
             imported += 1
@@ -1114,7 +1637,7 @@ class ModMenu(QMainWindow):
         QMessageBox.information(self, "Import Presets", f"Imported {imported} preset(s).")
 
     def save_presets(self):
-        presets = [self.preset_list.item(index).text() for index in range(self.preset_list.count())]
+        presets = [self.get_preset_item_serialized(self.preset_list.item(index)) for index in range(self.preset_list.count())]
         with open(self.presets_file, 'w') as file:
             file.write('\n'.join(presets))
 
@@ -1123,7 +1646,11 @@ class ModMenu(QMainWindow):
         try:
             with open(self.presets_file, 'r') as file:
                 presets = file.read().splitlines()
-            self.preset_list.addItems([line for line in presets if line.strip()])
+            for line in presets:
+                parsed = self.parse_preset_text(line)
+                if parsed:
+                    name, y_value, x_value, delay = parsed
+                    self.preset_list.addItem(self.create_preset_item(name, y_value, x_value, delay))
         except FileNotFoundError:
             pass
         self.filter_preset_list(self.preset_filter_input.text())
@@ -1224,6 +1751,9 @@ class ModMenu(QMainWindow):
             self.setMinimumSize(760, 520)
             self.setMaximumSize(16777215, 16777215)
             self.resize(*self.expanded_size)
+        self.apply_compact_layout_state()
+        if self.active_theme_colors:
+            self.applyTheme(self.active_theme_colors)
 
     def open_project_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.project_root))
@@ -1314,6 +1844,68 @@ class ModMenu(QMainWindow):
             f"Window: {mode_label} | Presets: {presets_count} | "
             f"Bindings: {bindings_count} | Cached AST: {cache_count} | Scripts found: {scripts_count}"
         )
+
+    def setup_editor_shortcuts(self):
+        self.shortcut_editor_save = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_editor_save.activated.connect(self.save_script)
+        self.shortcut_editor_open = QShortcut(QKeySequence("Ctrl+O"), self)
+        self.shortcut_editor_open.activated.connect(self.load_script)
+        self.shortcut_editor_find = QShortcut(QKeySequence("Ctrl+F"), self)
+        self.shortcut_editor_find.activated.connect(self.focus_editor_find)
+        self.shortcut_editor_run = QShortcut(QKeySequence("F5"), self)
+        self.shortcut_editor_run.activated.connect(self.run_script_clicked)
+
+    def focus_editor_find(self):
+        if not hasattr(self, 'editor_find_input'):
+            return
+        self.editor_find_input.setFocus()
+        self.editor_find_input.selectAll()
+
+    def find_in_editor(self, forward=True):
+        if not hasattr(self, 'script_editor'):
+            return
+        query = self.editor_find_input.text().strip()
+        if not query:
+            return
+
+        flags = QTextDocument.FindFlags()
+        if not forward:
+            flags |= QTextDocument.FindBackward
+        if self.editor_case_checkbox.isChecked():
+            flags |= QTextDocument.FindCaseSensitively
+
+        found = self.script_editor.find(query, flags)
+        if found:
+            return
+
+        cursor = self.script_editor.textCursor()
+        cursor.movePosition(QTextCursor.Start if forward else QTextCursor.End)
+        self.script_editor.setTextCursor(cursor)
+        self.script_editor.find(query, flags)
+
+    def find_next_in_editor(self):
+        self.find_in_editor(forward=True)
+
+    def find_prev_in_editor(self):
+        self.find_in_editor(forward=False)
+
+    def update_editor_status_labels(self):
+        if not hasattr(self, 'script_editor'):
+            return
+        cursor = self.script_editor.textCursor()
+        line = cursor.blockNumber() + 1
+        column = cursor.positionInBlock() + 1
+        if hasattr(self, 'editor_position_label'):
+            self.editor_position_label.setText(f"Ln {line}, Col {column}")
+        if hasattr(self, 'editor_modified_label'):
+            self.editor_modified_label.setText("Modified" if self.script_editor.document().isModified() else "Saved")
+        if hasattr(self, 'current_script_label'):
+            self.update_current_script_label()
+
+    def mark_editor_clean(self):
+        if hasattr(self, 'script_editor'):
+            self.script_editor.document().setModified(False)
+        self.update_editor_status_labels()
     
     def on_global_click(self, x, y, button, pressed):
         if button == mouse.Button.left:
@@ -1601,13 +2193,16 @@ class ModMenu(QMainWindow):
         self.hotkey_input.clear()
         self.update_runtime_summary()
 
-    def sync_script_binding_from_script(self, script_path, announce_changes=True):
+    def sync_script_binding_from_script(self, script_path, announce_changes=True, allow_new_binding=True):
         abs_script_path = os.path.abspath(script_path)
 
         existing_for_script = [
             hotkey for hotkey, existing_script in self.script_bindings.items()
             if os.path.abspath(existing_script) == abs_script_path
         ]
+
+        if not existing_for_script and not allow_new_binding:
+            return
 
         trigger_text = None
         normalized_hotkey = None
@@ -1812,12 +2407,15 @@ class ModMenu(QMainWindow):
             self.update_runtime_summary()
 
     def update_current_script_label(self):
+        modified_suffix = ""
+        if hasattr(self, 'script_editor') and self.script_editor.document().isModified():
+            modified_suffix = " *"
         if self.current_script_path:
             abs_path = os.path.abspath(self.current_script_path)
-            self.current_script_label.setText(f"Current file: {os.path.basename(abs_path)}")
+            self.current_script_label.setText(f"Current file: {os.path.basename(abs_path)}{modified_suffix}")
             self.current_script_label.setToolTip(abs_path)
         else:
-            self.current_script_label.setText("Current file: (none)")
+            self.current_script_label.setText(f"Current file: (none){modified_suffix}")
             self.current_script_label.setToolTip("")
 
     def open_script_file(self, path, announce_sync=True):
@@ -1825,8 +2423,9 @@ class ModMenu(QMainWindow):
         with open(abs_path, 'r') as file:
             self.script_editor.setPlainText(file.read())
         self.current_script_path = abs_path
+        self.mark_editor_clean()
         self.update_current_script_label()
-        self.sync_script_binding_from_script(abs_path, announce_changes=announce_sync)
+        self.sync_script_binding_from_script(abs_path, announce_changes=announce_sync, allow_new_binding=False)
         self.prime_script_runtime_cache(abs_path, announce=False)
         self.refresh_script_library_list()
 
@@ -1854,8 +2453,9 @@ class ModMenu(QMainWindow):
         if self.current_script_path:
             with open(self.current_script_path, 'w') as file:
                 file.write(self.script_editor.toPlainText())
+            self.mark_editor_clean()
             self.update_current_script_label()
-            self.sync_script_binding_from_script(self.current_script_path, announce_changes=False)
+            self.sync_script_binding_from_script(self.current_script_path, announce_changes=False, allow_new_binding=False)
             self.prime_script_runtime_cache(self.current_script_path, announce=False)
             self.refresh_script_library_list()
 
@@ -1893,6 +2493,7 @@ class ModMenu(QMainWindow):
             if os.path.abspath(path) == os.path.abspath(self.current_script_path or ""):
                 self.current_script_path = None
                 self.script_editor.clear()
+                self.mark_editor_clean()
             self.update_current_script_label()
             self.append_script_output(f"Deleted script: {path}")
             self.refresh_script_library_list()
